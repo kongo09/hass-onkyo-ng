@@ -27,7 +27,7 @@ This integration makes an effort to improve on the Home Assistant [core onkyo in
 
 ## Configuration
 
-* The integration attempts to autodiscover your receiver. Autodiscovery is based on the MAC address and original hostname of the devices. Home Assistant will notify you, if that is successful. 
+* The integration attempts to autodiscover your receiver. Autodiscovery is based on the MAC address. Home Assistant will notify you, if that is successful. 
 * Alternatively, go to Configuration -> Devices & Services
 * Click `Add Integration`
 * Search for `Onkyo NG` and select it
