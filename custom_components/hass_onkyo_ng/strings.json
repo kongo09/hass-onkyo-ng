@@ -1,0 +1,36 @@
+{
+  "title": "Onkyo AV Receiver",
+  "config": {
+    "step": {
+      "user": {
+        "title": "New Onkyo receiver",
+        "data": {
+          "name": "Entry name (optional)",
+          "host": "Receiver hostname or IP address",
+          "scan_interval": "State polling interval (seconds)"
+        }
+      },
+      "zeroconf_confirm": {
+        "title": "New Onkyo receiver discovered",
+        "description": "{model}",
+        "data": {
+          "name": "Entry name (optional)",
+          "scan_interval": "State polling interval (seconds)"
+        }
+      }
+    },
+    "error": {
+      "no_receiver_url": "Receiver address is required"
+    }
+  },
+  "options": {
+    "step": {
+      "options": {
+        "title": "Configure Onkyo receiver",
+        "data": {
+          "scan_interval": "State polling interval (seconds)"
+        }
+      }
+    }
+  }
+}

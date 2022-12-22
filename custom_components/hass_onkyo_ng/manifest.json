@@ -1,18 +1,18 @@
 {
-    "codeowners": ["@kongo09"],
-    "config_flow": true,
-    "dependencies": ["frontend", "http"],
-    "dhcp": [
-      {
-        "macaddress": "0009B0*"
-      },
-    ],
-    "documentation": "https://github.com/kongo09/hass-onkyo-ng/",
-    "domain": "onkyo_ng",
-    "iot_class": "local_polling",
-    "issue_tracker": "https://github.com/kongo09/hass-onkyo-ng/issues",
-    "name": "Onkyo NG",
-    "requirements": ["onkyo-eiscp==1.2.7"],
-    "version": "0.0.1",
-    "loggers": ["eiscp"]
+  "domain": "hass_onkyo_ng",
+  "codeowners": ["@kongo09"],
+  "config_flow": true,
+  "dependencies": ["frontend", "http"],
+  "dhcp": [
+    {
+      "macaddress": "0009B0*"
+    }
+  ],
+  "documentation": "https://github.com/kongo09/hass-onkyo-ng/",
+  "iot_class": "local_polling",
+  "issue_tracker": "https://github.com/kongo09/hass-onkyo-ng/issues",
+  "name": "Onkyo NG",
+  "requirements": ["onkyo-eiscp==1.2.7"],
+  "version": "0.0.1",
+  "loggers": ["eiscp"]
 }
