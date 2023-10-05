@@ -1,3 +1,5 @@
+## This is experiemental and doesn't work. It's full of bugs and currently not maintained!
+
 [![HACS Default][hacs_shield]][hacs]
 [![GitHub Latest Release][releases_shield]][latest_release]
 
