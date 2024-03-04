@@ -23,6 +23,7 @@ ATTR_IDENTIFIER = "identifier"
 
 CONF_SOURCES = "sources"
 CONF_SOUND_MODES = "sound_modes"
+CONF_ZONES = "zones"
 
 DEFAULT_NAME = "Onkyo Receiver"
 ONKYO_SUPPORTED_MAX_VOLUME = 100

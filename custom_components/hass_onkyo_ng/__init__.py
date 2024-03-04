@@ -41,9 +41,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # check for sources and sound modes
     sources = entry.data.get(CONF_SOURCES)
     sound_modes = entry.data.get(CONF_SOUND_MODES)
+    zones = entry.data.get(CONF_ZONES)
 
     onkyo_receiver = OnkyoReceiver(
         receiver,
+        zones=zones,
         sources=sources,
         sound_modes=sound_modes,
         max_volume=ONKYO_SUPPORTED_MAX_VOLUME,
