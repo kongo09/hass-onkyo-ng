@@ -6,6 +6,7 @@ from homeassistant.helpers.storage import Store
 import threading
 import logging
 from typing import Any
+import xml.etree.ElementTree as ET
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -26,12 +27,12 @@ class OnkyoReceiver:
         self._receiver.on_message = lambda msg: self._on_message_async(msg)
         self._reverse_source_mapping = {}
         self._reverse_sound_mode_mapping = {}
+        self._receiver_info = None
         self._max_volume = max_volume
         self._receiver_max_volume = receiver_max_volume
         self._hdmi_out_supported = True
         self._audio_info_supported = True
         self._video_info_supported = True
-        self.info = self._receiver.info
         self.listeners = []
         self._sync_pending: threading.Event = None
         self._sync_command_prefix: str = None
@@ -53,7 +54,15 @@ class OnkyoReceiver:
             ATTR_SOUND_MODE: None,
             ATTR_PRESET: None,
             ATTR_HDMI_OUT: None,
+            ATTR_RECEIVER_INFORMATION: {},
         }
+
+        # Perform synchronously to ensure we have basic data
+        self.command_sync('dock.receiver-information=query')
+
+    @property
+    def zones(self):
+        return self._receiver_info['zones']
 
     async def load_data(self):
         if self._storage:
@@ -90,14 +99,6 @@ class OnkyoReceiver:
 
     def _on_message_async(self, message):
         """Received a message from the receiver"""
-        if self._sync_pending:
-            _LOGGER.debug(f"Received {message} whilst waiting for sync response {self._sync_command_prefix}")
-            if self._sync_command_prefix == message[:3]:
-                _LOGGER.debug("Handled sync response")
-                self._sync_result = message
-                self._sync_pending.set()
-                return
-
         updates = {}
         try:
             message_decoded = iscp_to_command(message, with_zone=True)
@@ -139,7 +140,15 @@ class OnkyoReceiver:
                         updates[ATTR_SOUND_MODES] = list(self._reverse_sound_mode_mapping.keys())
                         self.store_data()
                     updates[ATTR_SOUND_MODE] = sound_mode
-
+            elif zone == 'dock':
+                if command == "receiver-information":
+                    _LOGGER.info("Got receiver info. Parsing")
+                    info = self._parse_receiver_information(attrib)
+                    self._receiver_info = info
+                    updates[ATTR_RECEIVER_INFORMATION] = info
+                    self.store_data()
+            else:
+                _LOGGER.info(f"Ignoring zone {zone}")
         except ValueError:
             _LOGGER.debug(f"Cannot decode raw message: {message}")
         if updates:
@@ -147,6 +156,13 @@ class OnkyoReceiver:
             _LOGGER.debug(f"Dispatch data to {len(self.listeners)} listeners")
             for listener in self.listeners:
                 listener(self.data)
+        if self._sync_pending:
+            _LOGGER.info(f"Received {message} whilst waiting for sync response {self._sync_command_prefix}")
+            if self._sync_command_prefix == message[:3]:
+                _LOGGER.info("Handled sync response")
+                self._sync_result = message
+                self._sync_pending.set()
+                return
 
     def _parse_onkyo_payload(self, payload):
         """Parse a payload returned from the eiscp library."""
@@ -199,6 +215,46 @@ class OnkyoReceiver:
             "picture_mode": self._tuple_get(values, 8),
         }
         return info
+
+    def _parse_receiver_information(self, receiver_information_xml) -> dict[str, Any]:
+        data = ET.fromstring(receiver_information_xml)
+        device = data.find('device')
+        model = device.find('model').text
+        productid = device.find('productid').text
+        serial = device.find('deviceserial').text
+        macaddress = device.find('macaddress').text
+        zones = {}
+        for zone in device.find('zonelist').findall('zone'):
+            if int(zone.attrib['value']) > 0:
+                zones[zone.attrib['id']] = {
+                    'name': zone.attrib['name'].lower(),
+                    'volmax': zone.attrib['volmax'],
+                }
+
+        sources = {}
+        for source in device.find('selectorlist').findall('selector'):
+            if int(source.attrib['value']) > 0:
+                # Assume this is a bitwise identifier for which zones support this source
+                source_zones = int(source.attrib['zone'], 16)
+                zone_ids = []
+                for zone in zones.keys():
+                    zone_id = int(zone, 16)
+                    if source_zones & (1 << (zone_id - 1)):
+                        zone_ids.append(zone)
+                sources[source.attrib['id']] = {
+                    'name': source.attrib['name'],
+                    'zones': zone_ids,
+                }
+        data = {
+            'model': model,
+            'productid': productid,
+            'serial': serial,
+            'macaddress': macaddress,
+            'zones': zones,
+            'sources': sources,
+        }
+        _LOGGER.info(f"Parsed {data}")
+        return data
 
     def raw(self, command):
         """Send a raw command."""

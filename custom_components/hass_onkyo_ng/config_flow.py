@@ -22,8 +22,6 @@ from .const import (
     INFO_IDENTIFIER,
     INFO_MODEL_NAME,
     POLLING_INTERVAL,
-    CONF_SOURCES,
-    CONF_SOUND_MODES,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -92,30 +90,28 @@ class OnkyoReceiverConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     raise InvalidHost()
 
                 # now let's try and see if we can connect to a receiver
-                receiver = eiscp.eISCP(host)
-                info = receiver.info
-                if info:
-                    _LOGGER.debug("Found host: %s", host)
-                else:
-                    _LOGGER.debug("Host not found: %s", host)
-                    raise ConnectionError()
+                onkyo_receiver = OnkyoReceiver(host, hass=None)
+                try:
+                    info = onkyo_receiver._receiver_info
+                    if info:
+                        _LOGGER.debug("Found host: %s", host)
+                    else:
+                        _LOGGER.debug("Host not found: %s", host)
+                        raise ConnectionError()
 
-                # use the MAC as unique id
-                unique_id = info[INFO_IDENTIFIER]
-                model_name = info[INFO_MODEL_NAME]
+                    # use the MAC as unique id
+                    unique_id = info['macaddress']
+                    model_name = info['model']
 
-                # check if we got something
-                if not unique_id:
-                    raise UnsupportedModel()
+                    # check if we got something
+                    if not unique_id:
+                        raise UnsupportedModel()
 
-                # set the unique id for the entry, abort if it already exists
-                await self.async_set_unique_id(unique_id)
-                self._abort_if_unique_id_configured()
-
-                # create a receiver object to check it is queryable
-                onkyo_receiver = OnkyoReceiver(host)
-                onkyo_receiver.command_sync('main.power=query')
-                onkyo_receiver.disconnect()
+                    # set the unique id for the entry, abort if it already exists
+                    await self.async_set_unique_id(unique_id)
+                    self._abort_if_unique_id_configured()
+                finally:
+                    onkyo_receiver.disconnect()
 
                 # compile a name from model and serial
                 return self.async_create_entry(
