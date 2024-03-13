@@ -110,14 +110,13 @@ class OnkyoDataUpdateCoordinator(DataUpdateCoordinator):
 class OnkyoReceiverEntity(CoordinatorEntity):
     """Class to set basics for a receiver entity."""
 
-    def __init__(self, coordinator: OnkyoDataUpdateCoordinator, zone: str) -> None:
+    def __init__(self, coordinator: OnkyoDataUpdateCoordinator) -> None:
         super().__init__(coordinator, )
         self._model_name = coordinator.data[ATTR_NAME]
         self._name = coordinator.data[ATTR_NAME]
         self._identifier = coordinator.data[ATTR_IDENTIFIER]
         self._serial_number = f"{self._model_name}_{self._identifier}"
         self._available = True
-        self._zone = zone
 
     @property
     def device_info(self):
@@ -126,7 +125,6 @@ class OnkyoReceiverEntity(CoordinatorEntity):
             "name": self._name,
             "model": self._model_name,
             "manufacturer": "Onkyo",
-            "zone": self._zone,
         }
 
     @property

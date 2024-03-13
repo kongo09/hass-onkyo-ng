@@ -6,6 +6,8 @@ PLATFORMS = ["media_player"]
 
 POLLING_INTERVAL = 30
 
+ATTR_ZONE = "zone"
+
 POWER_ON = "power_on"
 POWER_OFF = "power_off"
 
