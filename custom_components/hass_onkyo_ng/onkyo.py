@@ -1,8 +1,11 @@
 from __future__ import annotations
-from eiscp import eISCP
+from eiscp.core import Receiver, command_to_iscp, iscp_to_command
 from .const import *
-
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers.storage import Store
+import threading
 import logging
+from typing import Any
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -12,49 +15,138 @@ class OnkyoReceiver:
 
     def __init__(
         self,
-        receiver: eISCP,
-        sources: dict = None,
-        sound_modes: dict = None,
+        host: str,
+        hass: HomeAssistant,
         max_volume=ONKYO_SUPPORTED_MAX_VOLUME,
         receiver_max_volume=ONKYO_DEFAULT_RECEIVER_MAX_VOLUME,
     ) -> None:
         """Initialize."""
-        self._receiver = receiver
-        self._source_mapping = sources
+        self._host = host
+        self._receiver = Receiver(host)
+        self._receiver.on_message = lambda msg: self._on_message_async(msg)
         self._reverse_source_mapping = {}
-        self._sound_mode_mapping = sound_modes
         self._reverse_sound_mode_mapping = {}
         self._max_volume = max_volume
         self._receiver_max_volume = receiver_max_volume
         self._hdmi_out_supported = True
         self._audio_info_supported = True
         self._video_info_supported = True
+        self.info = self._receiver.info
+        self.listeners = []
+        self._sync_pending: threading.Event = None
+        self._sync_command_prefix: str = None
+        self._sync_result = None
+        if hass:
+            self._storage = Store[dict[str, Any]](hass, 1, f'onkyo_{host}')
+        else:
+            self._storage = None
 
-        # if source mapping has not been defined as part of config, try to get it from the device and use the first source
-        if not self._source_mapping:
-            sources = {}
-            source_list = self.get_sources()
-            for item in source_list:
-                first = item.split("_")[0]
-                sources[first] = item
-            self._source_mapping = sources
+        self.data = {
+            ATTR_POWER: None,
+            ATTR_AUDIO_INFO: None,
+            ATTR_VIDEO_INFO: None,
+            ATTR_MUTE: None,
+            ATTR_VOLUME: None,
+            ATTR_SOURCES: [],
+            ATTR_SOURCE: None,
+            ATTR_SOUND_MODES: [],
+            ATTR_SOUND_MODE: None,
+            ATTR_PRESET: None,
+            ATTR_HDMI_OUT: None,
+        }
 
-        # prepare reverse source mapping
-        for key, value in self._source_mapping.items():
-            self._reverse_source_mapping[value] = key
+    async def load_data(self):
+        if self._storage:
+            data = await self._storage.async_load()
+            _LOGGER.info(f"Loaded data {data}")
+            if data:
+                main_zone = data.get('zone_main', {})
+                self._reverse_source_mapping = main_zone.get('reverse_source_mapping', {})
+                self._reverse_sound_mode_mapping = main_zone.get('reverse_sound_mode_mapping', {})
+                self.data[ATTR_SOURCES] = list(self._reverse_source_mapping.keys())
+                self.data[ATTR_SOUND_MODES] = list(self._reverse_sound_mode_mapping.keys())
+                for listener in self.listeners:
+                    listener(self.data)
 
-        # try to get the sound modes from the device
-        if not self._sound_mode_mapping:
-            sound_modes = {}
-            sound_mode_list = self.get_sound_modes()
-            for item in sound_mode_list:
-                if item in LISTENING_MODE:
-                    sound_modes[item] = LISTENING_MODE[item]
-            self._sound_mode_mapping = sound_modes
+    def store_data(self):
+        if self._storage:
+            self._storage.async_delay_save(self._data_to_save, 1)
 
-        # prepare reverse sound mode mapping
-        for key, value in self._sound_mode_mapping.items():
-            self._reverse_sound_mode_mapping[value] = key
+    def _data_to_save(self):
+        data = {
+            'zone_main': {
+                'reverse_source_mapping': self._reverse_source_mapping,
+                'reverse_sound_mode_mapping': self._reverse_sound_mode_mapping,
+            },
+        }
+        return data
+
+    def disconnect(self):
+        _LOGGER.info("Disconnect from receiver")
+        self._receiver.disconnect()
+
+    def register_listener(self, listener):
+        self.listeners.append(listener)
+
+    def _on_message_async(self, message):
+        """Received a message from the receiver"""
+        if self._sync_pending:
+            _LOGGER.debug(f"Received {message} whilst waiting for sync response {self._sync_command_prefix}")
+            if self._sync_command_prefix == message[:3]:
+                _LOGGER.debug("Handled sync response")
+                self._sync_result = message
+                self._sync_pending.set()
+                return
+
+        updates = {}
+        try:
+            message_decoded = iscp_to_command(message, with_zone=True)
+            _LOGGER.info(f"Received command: {message_decoded}")
+            zone, command, attrib = message_decoded
+            if zone == "main":
+                if command in ["system-power", "power"]:
+                    updates[ATTR_POWER] = POWER_ON if attrib == "on" else POWER_OFF
+                elif command == "audio-information":
+                    info = self._parse_audio_information((command, attrib))
+                    updates[ATTR_AUDIO_INFO] = info
+                elif command == "video-information":
+                    info = self._parse_video_information((command, attrib))
+                    updates[ATTR_VIDEO_INFO] = info
+                elif command in ["audio-muting", "muting"]:
+                    updates[ATTR_MUTE] = attrib == "on"
+                elif command in ("master-volume", "volume"):
+                    updates[ATTR_VOLUME] = attrib / (self._receiver_max_volume * self._max_volume / 100)
+                elif command in ["input-selector", "selector"]:
+                    sources = self._parse_onkyo_payload((command, attrib))
+                    source = "_".join(sources)
+                    if not source in self._reverse_source_mapping:
+                        # New source found
+                        self._reverse_source_mapping[source] = sources[0]
+                        updates[ATTR_SOURCES] = list(self._reverse_source_mapping.keys())
+                        self.store_data()
+                    updates[ATTR_SOURCE] = source
+                elif command == "preset":
+                    updates[ATTR_PRESET] = attrib
+                elif command == "hdmi-output-selector":
+                    updates[ATTR_HDMI_OUT] = ",".join(attrib)
+                    if attrib == "N/A":
+                        self._hdmi_out_supported = False
+                elif command == "listening-mode":
+                    sound_modes = self._parse_onkyo_payload((command, attrib))
+                    sound_mode = "_".join(sound_modes)
+                    if not sound_mode in self._reverse_sound_mode_mapping:
+                        self._reverse_sound_mode_mapping[sound_mode] = sound_modes[0]
+                        updates[ATTR_SOUND_MODES] = list(self._reverse_sound_mode_mapping.keys())
+                        self.store_data()
+                    updates[ATTR_SOUND_MODE] = sound_mode
+
+        except ValueError:
+            _LOGGER.debug(f"Cannot decode raw message: {message}")
+        if updates:
+            self.data.update(updates)
+            _LOGGER.debug(f"Dispatch data to {len(self.listeners)} listeners")
+            for listener in self.listeners:
+                listener(self.data)
 
     def _parse_onkyo_payload(self, payload):
         """Parse a payload returned from the eiscp library."""
@@ -74,97 +166,6 @@ class OnkyoReceiver:
     def _tuple_get(self, tup, index, default=None):
         """Return a tuple item at index or a default value if it doesn't exist."""
         return (tup[index : index + 1] or [default])[0]
-
-    def get_sources(self) -> list:
-        """Iterate through the sources of the receiver."""
-
-        # find the power state and switch on if needed
-        status = self.command("system-power query")
-        power_state = status[1]
-        if power_state != "on":
-            self.command("system-power on")
-
-        # check if muted, if not, mute to avoid funny sound
-        status = self.command("audio-muting query")
-        muting_state = status[1]
-        if muting_state != "on":
-            self.command("audio-muting on")
-
-        # iterate over all available source until we hit the first source again to compile the list
-        first_source = None
-        source_list = []
-
-        while True:
-            current_source_raw = self.command("input-selector up")
-            current_source = ""
-            if current_source_raw:
-                sources = self._parse_onkyo_payload(current_source_raw)
-                current_source = "_".join(sources)
-
-            # if we find the first source again, we're done
-            if current_source == first_source:
-                break
-
-            # remember the first source
-            if not first_source:
-                first_source = current_source
-
-            # store the found source in the list
-            source_list.append(current_source)
-
-        # get receiver back into original state
-        self.command("input-selector down")
-        self.command(f"audio-muting {muting_state}")
-        if power_state != "on":
-            self.command("system-power off")
-
-        return source_list
-
-    def get_sound_modes(self) -> list:
-        """Iterate through the sound modes of the receiver."""
-
-        # find the power state and switch on if needed
-        status = self.command("system-power query")
-        power_state = status[1]
-        if power_state != "on":
-            self.command("system-power on")
-
-        # check if muted, if not, mute to avoid funny sound
-        status = self.command("audio-muting query")
-        muting_state = status[1]
-        if muting_state != "on":
-            self.command("audio-muting on")
-
-        # iterate over all available sound modes until we hit the first sound mode again to compile the list
-        first_sound_mode = None
-        sound_mode_list = []
-        count = 0
-
-        while True:
-            current_sound_mode_raw = self.raw("LMDUP")
-            current_sound_mode = ""
-            if current_sound_mode_raw:
-                current_sound_mode = current_sound_mode_raw[3:]
-                count += 1
-
-            # if we find the first sound mode again, we're done
-            if current_sound_mode == first_sound_mode and count > 5:
-                break
-
-            # remember the first source
-            if not first_sound_mode:
-                first_sound_mode = current_sound_mode
-
-            # store the found source in the list
-            sound_mode_list.append(current_sound_mode)
-
-        # get receiver back into original state
-        self.raw(f"LMD{first_sound_mode}")
-        self.command(f"audio-muting {muting_state}")
-        if power_state != "on":
-            self.command("system-power off")
-
-        return sound_mode_list
 
     def _parse_audio_information(self, audio_information_raw):
         values = self._parse_onkyo_payload(audio_information_raw)
@@ -200,121 +201,67 @@ class OnkyoReceiver:
         return info
 
     def raw(self, command):
-        """Run a raw eiscp command and catch connection errors."""
-        try:
-            result = self._receiver.raw(command)
-        except (ValueError, OSError, AttributeError, AssertionError):
-            if self._receiver.command_socket:
-                self._receiver.command_socket = None
-                _LOGGER.debug("Resetting connection")
-            else:
-                _LOGGER.debug("Disconnected. Attempting to reconnect")
-            return False
-        _LOGGER.debug("Result for %s: %s", command, result)
-        return result
+        """Send a raw command."""
+        _LOGGER.debug(f"Sending raw command: {command}")
+        self._receiver._ensure_socket_connected()
+        self._receiver.send(command)
 
     def command(self, command):
-        """Run an eiscp command and catch connection errors."""
+        """Send an eiscp command."""
+        _LOGGER.debug(f"Sending command: {command}")
+        self._receiver._ensure_socket_connected()
+        self._receiver.send(command_to_iscp(command))
+
+    def raw_sync(self, raw_command: str):
+        """Run a raw eiscp command synchronously."""
+        _LOGGER.info(f"Sending sync command {raw_command}")
+        self._sync_command_prefix = raw_command[:3]
+        self._sync_pending = threading.Event()
+        self._receiver.send(raw_command)
         try:
-            result = self._receiver.command(command)
-        except (ValueError, OSError, AttributeError, AssertionError):
-            if self._receiver.command_socket:
-                self._receiver.command_socket = None
-                _LOGGER.debug("Resetting connection")
-            else:
-                _LOGGER.debug("Disconnected. Attempting to reconnect")
-            return False
-        _LOGGER.debug("Result for %s: %s", command, result)
+            if not self._sync_pending.wait(10):
+                raise ValueError("Timeout waiting for response")
+            result_raw = self._sync_result
+            _LOGGER.info(f"Result: {result_raw}")
+            return result_raw
+        finally:
+            self._sync_pending = None
+            self._sync_command_prefix = None
+            self._sync_result = None
+
+    def command_sync(self, command: str):
+        """Run an eiscp command synchronously."""
+        _LOGGER.info(f"Sending sync command {command}")
+        raw_command = command_to_iscp(command)
+        result_raw = self.raw_sync(raw_command)
+        result = iscp_to_command(result_raw)
+        _LOGGER.info(f"Result: {result}")
         return result
 
-    async def update(self) -> dict:
+    def update(self):
         """Get the latest state from the device."""
-        data = {}
-
         # some basic info
-        data[ATTR_NAME] = self._receiver.info["model_name"]
-        data[ATTR_IDENTIFIER] = self._receiver.info["identifier"]
+        self.data[ATTR_NAME] = self._receiver.info["model_name"]
+        self.data[ATTR_IDENTIFIER] = self._receiver.info["identifier"]
 
         # retrieve power information
-        status = self.command("system-power query")
-
-        if not status:
-            return data
-
-        if status[1] == "on":
-            data[ATTR_POWER] = POWER_ON
-        else:
-            data[ATTR_POWER] = POWER_OFF
-            return data
-
+        self.command("main.power=query")
         # retrieve audio information
-        if self._audio_info_supported:
-            audio_information_raw = self.command("audio-information query")
-            info = self._parse_audio_information(audio_information_raw)
-            if info:
-                data[ATTR_AUDIO_INFO] = info
-            else:
-                data[ATTR_AUDIO_INFO] = None
-
+        self.command("main.audio-information=query")
         # retrieve video information
-        if self._video_info_supported:
-            video_information_raw = self.command("video-information query")
-            info = self._parse_video_information(video_information_raw)
-            if info:
-                data[ATTR_VIDEO_INFO] = info
-            else:
-                data[ATTR_VIDEO_INFO] = None
-
+        self.command("main.video-information=query")
         # retrieve mute information
-        mute_raw = self.command("audio-muting query")
-        if mute_raw:
-            data[ATTR_MUTE] = bool(mute_raw[1] == "on")
-        else:
-            data[ATTR_MUTE] = None
-
+        self.command("main.audio-muting=query")
         # retrieve volume information
-        volume_raw = self.command("volume query")
-        if volume_raw:
-            # AMP_VOL/MAX_RECEIVER_VOL*(MAX_VOL/100)
-            data[ATTR_VOLUME] = volume_raw[1] / (
-                self._receiver_max_volume * self._max_volume / 100
-            )
-        else:
-            data[ATTR_VOLUME] = None
-
+        self.command("main.volume=query")
         # retrieve source information
-        current_source_raw = self.command("input-selector query")
-        if current_source_raw:
-            sources = self._parse_onkyo_payload(current_source_raw)
-            source = "_".join(sources)
-            data[ATTR_SOURCE] = source
-        else:
-            data[ATTR_SOURCE] = None
-
+        self.command("main.input-selector=query")
         # retrieve sound mode information
-        current_sound_mode_raw = self.raw("LMDQSTN")
-        if current_sound_mode_raw:
-            current_sound_mode = current_sound_mode_raw[3:]
-            data[ATTR_SOUND_MODE] = current_sound_mode
-        else:
-            data[ATTR_SOUND_MODE] = None
-
+        self.command("main.listening-mode=query")
         # retrieve preset information
-        preset_raw = self.command("preset query")
-        if preset_raw:
-            data[ATTR_PRESET] = preset_raw[1]
-        else:
-            data[ATTR_PRESET] = None
-
+        self.command("main.preset=query")
         # If the following command is sent to a device with only one HDMI out,
         # the display shows 'Not Available'.
         # We avoid this by checking if HDMI out is supported
-        data[ATTR_HDMI_OUT] = None
         if self._hdmi_out_supported:
-            hdmi_out_raw = self.command("hdmi-output-selector query")
-            if hdmi_out_raw:
-                data[ATTR_HDMI_OUT] = ",".join(hdmi_out_raw[1])
-                if hdmi_out_raw[1] == "N/A":
-                    self._hdmi_out_supported = False
-
-        return data
+            self.command("main.hdmi-output-selector=query")
