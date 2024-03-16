@@ -30,6 +30,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     update_interval = entry.data[CONF_SCAN_INTERVAL]
 
     try:
+        # TODO: Where is this removed when the entry is unloaded...
         onkyo_receiver = OnkyoReceiver(
             host=host,
             hass=hass,
@@ -37,10 +38,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             receiver_max_volume=ONKYO_DEFAULT_RECEIVER_MAX_VOLUME,
         )
         await onkyo_receiver.load_data()
-        name = onkyo_receiver._receiver_info["model"]
-        serial = onkyo_receiver._receiver_info["serial"]
-        productid = onkyo_receiver._receiver_info["productid"]
-        macaddress = onkyo_receiver._receiver_info["macaddress"]
+        receiver_info = onkyo_receiver.receiver_info
+
+
+        name = receiver_info.model
+        serial = receiver_info.serial
+        productid = receiver_info.productid
+        macaddress = receiver_info.macaddress
         _LOGGER.debug("Found %s (Serial: %s) (Product ID: %s) (Mac Address: %s)", name, serial, productid, macaddress)
     except (ConnectionError) as error:
         _LOGGER.error("Cannot load data with error: %s", error)
@@ -93,7 +97,7 @@ class OnkyoDataUpdateCoordinator(DataUpdateCoordinator):
         self._onkyo_receiver.update()
 
     def receive_data(self, data):
-        _LOGGER.info(f"Data: {data}")
+        _LOGGER.debug(f"Data: {data}")
         self.async_set_updated_data(data)
 
     async def _async_update_data(self) -> dict:
