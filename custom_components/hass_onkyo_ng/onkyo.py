@@ -1,14 +1,17 @@
 from __future__ import annotations
+from collections import defaultdict
 from eiscp.core import Receiver, command_to_iscp, iscp_to_command
 from .const import *
+from .util import dict_merge
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.storage import Store
 import threading
 import logging
 from typing import Any
+import xml.etree.ElementTree as ET
 
 _LOGGER = logging.getLogger(__name__)
-
+_ZONE_NAMES = ("main", "zone2", "zone3", "zone4")
 
 class OnkyoReceiver:
     """Class to manage fetching Onkyo data from the receiver."""
@@ -26,12 +29,12 @@ class OnkyoReceiver:
         self._receiver.on_message = lambda msg: self._on_message_async(msg)
         self._reverse_source_mapping = {}
         self._reverse_sound_mode_mapping = {}
+        self._receiver_info = None
         self._max_volume = max_volume
         self._receiver_max_volume = receiver_max_volume
         self._hdmi_out_supported = True
         self._audio_info_supported = True
         self._video_info_supported = True
-        self.info = self._receiver.info
         self.listeners = []
         self._sync_pending: threading.Event = None
         self._sync_command_prefix: str = None
@@ -42,18 +45,30 @@ class OnkyoReceiver:
             self._storage = None
 
         self.data = {
-            ATTR_POWER: None,
-            ATTR_AUDIO_INFO: None,
-            ATTR_VIDEO_INFO: None,
-            ATTR_MUTE: None,
-            ATTR_VOLUME: None,
             ATTR_SOURCES: [],
-            ATTR_SOURCE: None,
             ATTR_SOUND_MODES: [],
-            ATTR_SOUND_MODE: None,
             ATTR_PRESET: None,
             ATTR_HDMI_OUT: None,
+            ATTR_RECEIVER_INFORMATION: {},
         }
+        for zone in _ZONE_NAMES:
+            key = f"{ATTR_ZONE}_{zone}"
+            self.data[key] = {
+                ATTR_POWER: None,
+                ATTR_AUDIO_INFO: None,
+                ATTR_VIDEO_INFO: None,
+                ATTR_MUTE: None,
+                ATTR_VOLUME: None,
+                ATTR_SOURCE: None,
+                ATTR_SOUND_MODE: None,
+            }
+
+        # Perform synchronously to ensure we have basic data
+        self.command_sync('dock.receiver-information=query')
+
+    @property
+    def zones(self):
+        return self._receiver_info['zones']
 
     async def load_data(self):
         if self._storage:
@@ -65,6 +80,9 @@ class OnkyoReceiver:
                 self._reverse_sound_mode_mapping = main_zone.get('reverse_sound_mode_mapping', {})
                 self.data[ATTR_SOURCES] = list(self._reverse_source_mapping.keys())
                 self.data[ATTR_SOUND_MODES] = list(self._reverse_sound_mode_mapping.keys())
+                #self._receiver_info = data.get('receiver_information', {})
+                #self.data[ATTR_RECEIVER_INFORMATION] = self._receiver_info
+
                 for listener in self.listeners:
                     listener(self.data)
 
@@ -90,32 +108,25 @@ class OnkyoReceiver:
 
     def _on_message_async(self, message):
         """Received a message from the receiver"""
-        if self._sync_pending:
-            _LOGGER.debug(f"Received {message} whilst waiting for sync response {self._sync_command_prefix}")
-            if self._sync_command_prefix == message[:3]:
-                _LOGGER.debug("Handled sync response")
-                self._sync_result = message
-                self._sync_pending.set()
-                return
-
-        updates = {}
+        updates = defaultdict(dict)
         try:
             message_decoded = iscp_to_command(message, with_zone=True)
             _LOGGER.info(f"Received command: {message_decoded}")
             zone, command, attrib = message_decoded
-            if zone == "main":
+            if zone in _ZONE_NAMES:
+                zone_key = f"{ATTR_ZONE}_{zone}"
                 if command in ["system-power", "power"]:
-                    updates[ATTR_POWER] = POWER_ON if attrib == "on" else POWER_OFF
+                    updates[zone_key][ATTR_POWER] = POWER_ON if attrib == "on" else POWER_OFF
                 elif command == "audio-information":
                     info = self._parse_audio_information((command, attrib))
-                    updates[ATTR_AUDIO_INFO] = info
+                    updates[zone_key][ATTR_AUDIO_INFO] = info
                 elif command == "video-information":
                     info = self._parse_video_information((command, attrib))
-                    updates[ATTR_VIDEO_INFO] = info
+                    updates[zone_key][ATTR_VIDEO_INFO] = info
                 elif command in ["audio-muting", "muting"]:
-                    updates[ATTR_MUTE] = attrib == "on"
+                    updates[zone_key][ATTR_MUTE] = attrib == "on"
                 elif command in ("master-volume", "volume"):
-                    updates[ATTR_VOLUME] = attrib / (self._receiver_max_volume * self._max_volume / 100)
+                    updates[zone_key][ATTR_VOLUME] = attrib / (self._receiver_max_volume * self._max_volume / 100)
                 elif command in ["input-selector", "selector"]:
                     sources = self._parse_onkyo_payload((command, attrib))
                     source = "_".join(sources)
@@ -124,11 +135,11 @@ class OnkyoReceiver:
                         self._reverse_source_mapping[source] = sources[0]
                         updates[ATTR_SOURCES] = list(self._reverse_source_mapping.keys())
                         self.store_data()
-                    updates[ATTR_SOURCE] = source
+                    updates[zone_key][ATTR_SOURCE] = source
                 elif command == "preset":
-                    updates[ATTR_PRESET] = attrib
+                    updates[zone_key][ATTR_PRESET] = attrib
                 elif command == "hdmi-output-selector":
-                    updates[ATTR_HDMI_OUT] = ",".join(attrib)
+                    updates[zone_key][ATTR_HDMI_OUT] = ",".join(attrib)
                     if attrib == "N/A":
                         self._hdmi_out_supported = False
                 elif command == "listening-mode":
@@ -138,15 +149,30 @@ class OnkyoReceiver:
                         self._reverse_sound_mode_mapping[sound_mode] = sound_modes[0]
                         updates[ATTR_SOUND_MODES] = list(self._reverse_sound_mode_mapping.keys())
                         self.store_data()
-                    updates[ATTR_SOUND_MODE] = sound_mode
-
+                    updates[zone_key][ATTR_SOUND_MODE] = sound_mode
+            elif zone == 'dock':
+                if command == "receiver-information":
+                    _LOGGER.info("Got receiver info. Parsing")
+                    info = self._parse_receiver_information(attrib)
+                    self._receiver_info = info
+                    updates[ATTR_RECEIVER_INFORMATION] = info
+                    self.store_data()
+            else:
+                _LOGGER.info(f"Ignoring zone {zone}")
         except ValueError:
             _LOGGER.debug(f"Cannot decode raw message: {message}")
         if updates:
-            self.data.update(updates)
+            dict_merge(self.data, updates)
             _LOGGER.debug(f"Dispatch data to {len(self.listeners)} listeners")
             for listener in self.listeners:
                 listener(self.data)
+        if self._sync_pending:
+            _LOGGER.info(f"Received {message} whilst waiting for sync response {self._sync_command_prefix}")
+            if self._sync_command_prefix == message[:3]:
+                _LOGGER.info("Handled sync response")
+                self._sync_result = message
+                self._sync_pending.set()
+                return
 
     def _parse_onkyo_payload(self, payload):
         """Parse a payload returned from the eiscp library."""
@@ -200,6 +226,46 @@ class OnkyoReceiver:
         }
         return info
 
+    def _parse_receiver_information(self, receiver_information_xml) -> dict[str, Any]:
+        data = ET.fromstring(receiver_information_xml)
+        device = data.find('device')
+        model = device.find('model').text
+        productid = device.find('productid').text
+        serial = device.find('deviceserial').text
+        macaddress = device.find('macaddress').text
+        zones = {}
+        for zone in device.find('zonelist').findall('zone'):
+            if int(zone.attrib['value']) > 0:
+                zones[zone.attrib['id']] = {
+                    'name': zone.attrib['name'].lower(),
+                    'volmax': zone.attrib['volmax'],
+                }
+
+        sources = {}
+        for source in device.find('selectorlist').findall('selector'):
+            if int(source.attrib['value']) > 0:
+                # Assume this is a bitwise identifier for which zones support this source
+                source_zones = int(source.attrib['zone'], 16)
+                zone_ids = []
+                for zone in zones.keys():
+                    zone_id = int(zone, 16)
+                    if source_zones & (1 << (zone_id - 1)):
+                        zone_ids.append(zone)
+                sources[source.attrib['id']] = {
+                    'name': source.attrib['name'],
+                    'zones': zone_ids,
+                }
+        data = {
+            'model': model,
+            'productid': productid,
+            'serial': serial,
+            'macaddress': macaddress,
+            'zones': zones,
+            'sources': sources,
+        }
+        _LOGGER.info(f"Parsed {data}")
+        return data
+
     def raw(self, command):
         """Send a raw command."""
         _LOGGER.debug(f"Sending raw command: {command}")
@@ -241,27 +307,36 @@ class OnkyoReceiver:
     def update(self):
         """Get the latest state from the device."""
         # some basic info
-        self.data[ATTR_NAME] = self._receiver.info["model_name"]
-        self.data[ATTR_IDENTIFIER] = self._receiver.info["identifier"]
+        self.data[ATTR_NAME] = self._receiver_info["model"]
+        self.data[ATTR_IDENTIFIER] = self._receiver_info["macaddress"]
 
-        # retrieve power information
-        self.command("main.power=query")
-        # retrieve audio information
-        self.command("main.audio-information=query")
-        # retrieve video information
-        self.command("main.video-information=query")
-        # retrieve mute information
-        self.command("main.audio-muting=query")
-        # retrieve volume information
-        self.command("main.volume=query")
-        # retrieve source information
-        self.command("main.input-selector=query")
-        # retrieve sound mode information
-        self.command("main.listening-mode=query")
-        # retrieve preset information
-        self.command("main.preset=query")
-        # If the following command is sent to a device with only one HDMI out,
-        # the display shows 'Not Available'.
-        # We avoid this by checking if HDMI out is supported
-        if self._hdmi_out_supported:
-            self.command("main.hdmi-output-selector=query")
+        for zone in _ZONE_NAMES:
+            # retrieve power information
+            self.command(f"{zone}.power=query")
+            # retrieve volume information
+            self.command(f"{zone}.volume=query")
+
+            if zone == "main":
+                # retrieve audio information
+                self.command("main.audio-information=query")
+                # retrieve video information
+                self.command("main.video-information=query")
+                # retrieve sound mode information
+                self.command("main.listening-mode=query")
+                # retrieve preset information
+                self.command("main.preset=query")
+                # If the following command is sent to a device with only one HDMI out,
+                # the display shows 'Not Available'.
+                # We avoid this by checking if HDMI out is supported
+                if self._hdmi_out_supported:
+                    self.command("main.hdmi-output-selector=query")
+                # retrieve mute information
+                self.command("main.audio-muting=query")
+                # retrieve source information
+                self.command(f"{zone}.input-selector=query")
+
+            else:
+                # retrieve mute information
+                self.command(f"{zone}.muting=query")
+                # retrieve source information
+                self.command(f"{zone}.selector=query")

@@ -37,8 +37,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             receiver_max_volume=ONKYO_DEFAULT_RECEIVER_MAX_VOLUME,
         )
         await onkyo_receiver.load_data()
-        name = onkyo_receiver.info["model_name"]
-        _LOGGER.debug("Found %s", name)
+        name = onkyo_receiver._receiver_info["model"]
+        serial = onkyo_receiver._receiver_info["serial"]
+        productid = onkyo_receiver._receiver_info["productid"]
+        macaddress = onkyo_receiver._receiver_info["macaddress"]
+        _LOGGER.debug("Found %s (Serial: %s) (Product ID: %s) (Mac Address: %s)", name, serial, productid, macaddress)
     except (ConnectionError) as error:
         _LOGGER.error("Cannot load data with error: %s", error)
         return False
@@ -108,7 +111,7 @@ class OnkyoReceiverEntity(CoordinatorEntity):
     """Class to set basics for a receiver entity."""
 
     def __init__(self, coordinator: OnkyoDataUpdateCoordinator) -> None:
-        super().__init__(coordinator)
+        super().__init__(coordinator, )
         self._model_name = coordinator.data[ATTR_NAME]
         self._name = coordinator.data[ATTR_NAME]
         self._identifier = coordinator.data[ATTR_IDENTIFIER]
