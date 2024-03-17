@@ -112,12 +112,10 @@ class OnkyoReceiverConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 await self.async_set_unique_id(unique_id)
                 self._abort_if_unique_id_configured()
 
-                # create a receiver object to scan for available sources and sound modes
-                onkyo_receiver = OnkyoReceiver(receiver=receiver)
-                sources = onkyo_receiver._source_mapping
-                sound_modes = onkyo_receiver._sound_mode_mapping
-                user_input[CONF_SOURCES] = sources
-                user_input[CONF_SOUND_MODES] = sound_modes
+                # create a receiver object to check it is queryable
+                onkyo_receiver = OnkyoReceiver(host)
+                onkyo_receiver.command_sync('main.power=query')
+                onkyo_receiver.disconnect()
 
                 # compile a name from model and serial
                 return self.async_create_entry(

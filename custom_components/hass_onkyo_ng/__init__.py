@@ -2,8 +2,6 @@
 from __future__ import annotations
 from datetime import timedelta
 
-import eiscp
-
 from .const import *
 
 from homeassistant.core import HomeAssistant
@@ -30,25 +28,20 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     # get the receiver
     update_interval = entry.data[CONF_SCAN_INTERVAL]
-    receiver = eiscp.eISCP(host)
+
     try:
-        name = receiver.info["model_name"]
+        onkyo_receiver = OnkyoReceiver(
+            host=host,
+            hass=hass,
+            max_volume=ONKYO_SUPPORTED_MAX_VOLUME,
+            receiver_max_volume=ONKYO_DEFAULT_RECEIVER_MAX_VOLUME,
+        )
+        await onkyo_receiver.load_data()
+        name = onkyo_receiver.info["model_name"]
         _LOGGER.debug("Found %s", name)
     except (ConnectionError) as error:
         _LOGGER.error("Cannot load data with error: %s", error)
         return False
-
-    # check for sources and sound modes
-    sources = entry.data.get(CONF_SOURCES)
-    sound_modes = entry.data.get(CONF_SOUND_MODES)
-
-    onkyo_receiver = OnkyoReceiver(
-        receiver,
-        sources=sources,
-        sound_modes=sound_modes,
-        max_volume=ONKYO_SUPPORTED_MAX_VOLUME,
-        receiver_max_volume=ONKYO_DEFAULT_RECEIVER_MAX_VOLUME,
-    )
 
     # setup a coordinator
     coordinator = OnkyoDataUpdateCoordinator(
@@ -92,17 +85,23 @@ class OnkyoDataUpdateCoordinator(DataUpdateCoordinator):
     ) -> None:
         """Initialize."""
         self._onkyo_receiver = onkyo_receiver
+        self._onkyo_receiver.register_listener(self.receive_data)
         super().__init__(hass, _LOGGER, name=DOMAIN, update_interval=update_interval)
+        self._onkyo_receiver.update()
+
+    def receive_data(self, data):
+        _LOGGER.info(f"Data: {data}")
+        self.async_set_updated_data(data)
 
     async def _async_update_data(self) -> dict:
         """Update data via library."""
         data = {}
         try:
             # Ask the library to reload fresh data
-            data = await self._onkyo_receiver.update()
+            self._onkyo_receiver.update()
+            return self._onkyo_receiver.data
         except (ConnectionError) as error:
             raise UpdateFailed(error) from error
-        return data
 
 
 class OnkyoReceiverEntity(CoordinatorEntity):
