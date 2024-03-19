@@ -47,7 +47,7 @@ class OnkyoReceiver:
             self.sources: List[OnkyoReceiver.ReceiverSource] = []
 
         def __str__(self):
-            return f"ReceiverInfo(model: {self.model}, serial: {self.serial}, productid: {productid}, macaddress: {macaddress}, zones: {self.zones}, sources: {self.sources})"
+            return f"ReceiverInfo(model: {self.model}, serial: {self.serial}, productid: {self.productid}, macaddress: {self.macaddress}, zones: {self.zones}, sources: {self.sources})"
 
         def parse_xml(self, receiver_information_xml: str):
             data = ET.fromstring(receiver_information_xml)
@@ -87,7 +87,7 @@ class OnkyoReceiver:
     def __init__(
         self,
         host: str,
-        hass: HomeAssistant,
+        hass: HomeAssistant | None,
         max_volume=ONKYO_SUPPORTED_MAX_VOLUME,
         receiver_max_volume=ONKYO_DEFAULT_RECEIVER_MAX_VOLUME,
     ) -> None:
