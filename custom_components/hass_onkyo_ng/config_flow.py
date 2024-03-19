@@ -6,8 +6,6 @@ from homeassistant.data_entry_flow import FlowResult
 from homeassistant.const import CONF_HOST, CONF_NAME, CONF_SCAN_INTERVAL
 from homeassistant.helpers import config_validation as cv
 
-import eiscp
-
 from typing import Any
 import ipaddress
 
