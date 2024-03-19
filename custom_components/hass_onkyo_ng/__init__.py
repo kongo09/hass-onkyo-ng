@@ -38,9 +38,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             receiver_max_volume=ONKYO_DEFAULT_RECEIVER_MAX_VOLUME,
         )
         await onkyo_receiver.load_data()
-        receiver_info = onkyo_receiver.receiver_info
 
+        retries = 3
+        receiver_info = None
+        while receiver_info is None and retries > 0:
+            retries -= 1
+            try:
+                receiver_info = onkyo_receiver.receiver_info
+            except Exception as error:
+                _LOGGER.error("Error getting receiver information", error)
+                raise error
 
+        _LOGGER.info(receiver_info)
         name = receiver_info.model
         serial = receiver_info.serial
         productid = receiver_info.productid
