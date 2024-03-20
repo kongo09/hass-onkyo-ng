@@ -53,7 +53,7 @@ async def async_setup_entry(
     entities = []
 
     coordinator = hass.data[DOMAIN][entry.entry_id]
-    receiver: OnkyoReceiver = coordinator._onkyo_receiver
+    receiver: OnkyoReceiver = coordinator.onkyo_receiver
     zones = receiver.receiver_info.zones
 
     # Create a media player entity for each supported zone
@@ -84,7 +84,7 @@ class OnkyoMediaPlayer(OnkyoReceiverEntity, MediaPlayerEntity):
         self._attr_supported_features = SUPPORT_ONKYO
         self._attr_device_class = "receiver"
 
-        self._onkyo_receiver = coordinator._onkyo_receiver
+        self._onkyo_receiver = coordinator.onkyo_receiver
         self._attr_is_volume_muted = False
         self._attr_volume_level = 0
         self._attr_state = MediaPlayerState.OFF

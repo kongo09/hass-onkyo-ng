@@ -1,6 +1,7 @@
 """The Onkyo AV receiver component."""
 from __future__ import annotations
 from datetime import timedelta
+from typing import Any
 
 from .const import *
 
@@ -30,7 +31,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     update_interval = entry.data[CONF_SCAN_INTERVAL]
 
     try:
-        # TODO: Where is this removed when the entry is unloaded...
         onkyo_receiver = OnkyoReceiver(
             host=host,
             hass=hass,
@@ -82,10 +82,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry):
     """Unload a config entry."""
 
+    hass_data: dict[str, Any] = hass.data[DOMAIN]
+    receiver: OnkyoReceiver = hass_data[entry.entry_id].onkyo_receiver
+
     for p in PLATFORMS:
         await hass.config_entries.async_forward_entry_unload(entry, p)
 
-    hass.data[DOMAIN].pop(entry.entry_id)
+    hass_data.pop(entry.entry_id)
+    receiver.disconnect()
 
     return True
 
@@ -100,10 +104,10 @@ class OnkyoDataUpdateCoordinator(DataUpdateCoordinator):
         update_interval: timedelta,
     ) -> None:
         """Initialize."""
-        self._onkyo_receiver = onkyo_receiver
-        self._onkyo_receiver.register_listener(self.receive_data)
+        self.onkyo_receiver: OnkyoReceiver = onkyo_receiver
+        self.onkyo_receiver.register_listener(self.receive_data)
         super().__init__(hass, _LOGGER, name=DOMAIN, update_interval=update_interval)
-        self._onkyo_receiver.update()
+        self.onkyo_receiver.update()
 
     def receive_data(self, data):
         _LOGGER.debug(f"Data: {data}")
@@ -114,8 +118,8 @@ class OnkyoDataUpdateCoordinator(DataUpdateCoordinator):
         data = {}
         try:
             # Ask the library to reload fresh data
-            self._onkyo_receiver.update()
-            return self._onkyo_receiver.data
+            self.onkyo_receiver.update()
+            return self.onkyo_receiver.data
         except (ConnectionError) as error:
             raise UpdateFailed(error) from error
 
