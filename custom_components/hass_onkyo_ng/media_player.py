@@ -15,6 +15,7 @@ from homeassistant.components.media_player import (
 from homeassistant.helpers.typing import HomeAssistantType
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.util import slugify
+from .onkyo import OnkyoReceiver
 
 import logging
 
@@ -52,12 +53,13 @@ async def async_setup_entry(
     entities = []
 
     coordinator = hass.data[DOMAIN][entry.entry_id]
-    zones = coordinator._onkyo_receiver.zones.values()
+    receiver: OnkyoReceiver = coordinator.onkyo_receiver
+    zones = receiver.receiver_info.zones
 
     # Create a media player entity for each supported zone
     for zone in zones:
-        _LOGGER.info(f"Set up Onkyo zone: {zone['name']}")
-        entities.append(OnkyoMediaPlayer(coordinator, zone['name']))
+        _LOGGER.info(f"Set up Onkyo zone: {zone.name}")
+        entities.append(OnkyoMediaPlayer(coordinator, zone))
 
     async_add_entities(entities, update_before_add=True)
     return True
@@ -68,26 +70,28 @@ class OnkyoMediaPlayer(OnkyoReceiverEntity, MediaPlayerEntity):
 
     @property
     def zone_data(self):
-        return self.coordinator.data.get(f"{ATTR_ZONE}_{self._zone}", {})
+        return self.coordinator.data.get(f"{ATTR_ZONE}_{self._zone_name}", {})
 
-    def __init__(self, coordinator: OnkyoDataUpdateCoordinator, zone: str) -> None:
+    def __init__(self, coordinator: OnkyoDataUpdateCoordinator, zone: OnkyoReceiver.ReceiverZone) -> None:
         super().__init__(coordinator)
         self._zone = zone
-        self._zone_key = f"{ATTR_ZONE}_{zone}"
+        self._zone_name = zone.name
+        self._zone_key = f"{ATTR_ZONE}_{zone.name}"
         self._attr_name = self._model_name
         if zone != "main":
-            self._attr_name += "_" + zone
-        self.entity_id = "media_player." + slugify("Onkyo" + " " + self._model_name + " " + zone)
+            self._attr_name += "_" + zone.name
+        self.entity_id = "media_player." + slugify("Onkyo" + " " + self._model_name + " " + zone.name)
         self._attr_supported_features = SUPPORT_ONKYO
         self._attr_device_class = "receiver"
 
-        self._onkyo_receiver = coordinator._onkyo_receiver
+        self._onkyo_receiver = coordinator.onkyo_receiver
         self._attr_is_volume_muted = False
         self._attr_volume_level = 0
         self._attr_state = MediaPlayerState.OFF
-        self._attr_unique_id = self._serial_number + "_" + zone
+        self._attr_unique_id = self._serial_number + "_" + zone.name
         self._max_volume = self._onkyo_receiver._max_volume
         self._receiver_max_volume = self._onkyo_receiver._receiver_max_volume
+        self._attr_source_list = [source.name for source in zone.sources]
 
         # prepare source list
         self._reverse_source_mapping = self._onkyo_receiver._reverse_source_mapping
@@ -123,15 +127,13 @@ class OnkyoMediaPlayer(OnkyoReceiverEntity, MediaPlayerEntity):
             return MediaPlayerState.OFF
 
     @property
-    def source_list(self) -> list[str] | None:
-        """List of available input sources."""
-        return self.coordinator.data[ATTR_SOURCES]
-
-    @property
     def source(self) -> str | None:
         """Return readable source."""
-        source = self.zone_data[ATTR_SOURCE]
-        return source
+        source_id = self.zone_data[ATTR_SOURCE]
+        for source in self._zone.sources:
+            if source.id == source_id:
+                return source.name
+        return None
 
     @property
     def sound_mode_list(self) -> list[str] | None:
@@ -183,7 +185,7 @@ class OnkyoMediaPlayer(OnkyoReceiverEntity, MediaPlayerEntity):
 
     def turn_off(self) -> None:
         """Turn the media player off."""
-        self._onkyo_receiver.command(f"{self._zone}.power=standby")
+        self._onkyo_receiver.command(f"{self._zone_name}.power=standby")
 
     def set_volume_level(self, volume: float) -> None:
         """
@@ -195,46 +197,49 @@ class OnkyoMediaPlayer(OnkyoReceiverEntity, MediaPlayerEntity):
         """
         #        HA_VOL * (MAX VOL / 100) * MAX_RECEIVER_VOL
         self._onkyo_receiver.command(
-            f"{self._zone}.volume={int(volume * (self._max_volume / 100) * self._receiver_max_volume)}"
+            f"{self._zone_name}.volume={int(volume * (self._max_volume / 100) * self._receiver_max_volume)}"
         )
 
     def volume_up(self) -> None:
         """Increase volume by 1 step."""
-        self._onkyo_receiver.command(f"{self._zone}.volume=level-up")
+        self._onkyo_receiver.command(f"{self._zone_name}.volume=level-up")
 
     def volume_down(self) -> None:
         """Decrease volume by 1 step."""
-        self._onkyo_receiver.command(f"{self._zone}.volume=level-down")
+        self._onkyo_receiver.command(f"{self._zone_name}.volume=level-down")
 
     def mute_volume(self, mute: bool) -> None:
         """Mute (true) or unmute (false) media player."""
-        cmd = "audio-muting" if self._zone == "main" else "muting"
+        cmd = "audio-muting" if self._zone_name == "main" else "muting"
         if mute:
-            self._onkyo_receiver.command(f"{self._zone}.{cmd}=on")
+            self._onkyo_receiver.command(f"{self._zone_name}.{cmd}=on")
         else:
-            self._onkyo_receiver.command(f"{self._zone}.{cmd}=off")
+            self._onkyo_receiver.command(f"{self._zone_name}.{cmd}=off")
 
     def turn_on(self) -> None:
         """Turn the media player on."""
-        self._onkyo_receiver.command(f"{self._zone}.power=on")
+        self._onkyo_receiver.command(f"{self._zone_name}.power=on")
 
     def select_source(self, source: str) -> None:
         """Set the input source."""
-        cmd = "input-selector" if self._zone == "main" else "selector"
-        if self._reverse_source_mapping and source in self._reverse_source_mapping:
-            self._onkyo_receiver.command(f"{self._zone}.{cmd}={self._reverse_source_mapping[source]}")
+        try:
+            source = next(filter(lambda s: s.name.lower() == source.lower(), self._zone.sources))
+            self._onkyo_receiver.select_source(self._zone, source.id)
+        except StopIteration:
+            _LOGGER.error(f"Cannot find source {source}")
+            raise Exception(f"Cannot find source {source}")
 
     def select_sound_mode(self, sound_mode: str) -> None:
         """Set the sound mode."""
         if self._reverse_sound_mode_mapping and sound_mode in self._reverse_sound_mode_mapping:
-            self._onkyo_receiver.command(f"{self._zone}.listening-mode={self._reverse_sound_mode_mapping[sound_mode]}")
+            self._onkyo_receiver.command(f"{self._zone_name}.listening-mode={self._reverse_sound_mode_mapping[sound_mode]}")
 
     def play_media(self, media_type: str, media_id: str, **kwargs: Any) -> None:
         """Play radio station by preset number."""
         source = self._reverse_source_mapping[self._attr_source]
         if media_type.lower() == "radio" and source in DEFAULT_PLAYABLE_SOURCES:
-            self._onkyo_receiver.command(f"{self._zone}.preset={media_id}")
+            self._onkyo_receiver.command(f"{self._zone_name}.preset={media_id}")
 
     def select_output(self, output):
         """Set hdmi-out."""
-        self._onkyo_receiver.command(f"{self._zone}.hdmi-output-selector={output}")
+        self._onkyo_receiver.command(f"{self._zone_name}.hdmi-output-selector={output}")

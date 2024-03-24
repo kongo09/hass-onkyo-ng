@@ -6,8 +6,6 @@ from homeassistant.data_entry_flow import FlowResult
 from homeassistant.const import CONF_HOST, CONF_NAME, CONF_SCAN_INTERVAL
 from homeassistant.helpers import config_validation as cv
 
-import eiscp
-
 from typing import Any
 import ipaddress
 
@@ -18,14 +16,10 @@ from .onkyo import OnkyoReceiver
 
 from .const import (
     DOMAIN,
-    INFO_HOST,
-    INFO_IDENTIFIER,
-    INFO_MODEL_NAME,
     POLLING_INTERVAL,
 )
 
 _LOGGER = logging.getLogger(__name__)
-
 
 def host_valid(host: str) -> bool:
     """Return True if hostname or IP address is valid."""
@@ -51,8 +45,8 @@ class OnkyoReceiverConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     def __init__(self) -> None:
         """Initialize."""
-        self.receiver: eiscp.eISCP = None
         self.host: str = None
+        _LOGGER.info("Created Onkyo config flow")
 
     def _get_schema(self, user_input):
         """Provide schema for user input."""
@@ -92,7 +86,7 @@ class OnkyoReceiverConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 # now let's try and see if we can connect to a receiver
                 onkyo_receiver = OnkyoReceiver(host, hass=None)
                 try:
-                    info = onkyo_receiver._receiver_info
+                    info = onkyo_receiver.receiver_info
                     if info:
                         _LOGGER.debug("Found host: %s", host)
                     else:
@@ -100,8 +94,8 @@ class OnkyoReceiverConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         raise ConnectionError()
 
                     # use the MAC as unique id
-                    unique_id = info['macaddress']
-                    model_name = info['model']
+                    unique_id = info.macaddress
+                    model_name = info.model
 
                     # check if we got something
                     if not unique_id:
@@ -139,52 +133,61 @@ class OnkyoReceiverConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         errors = {}
 
-        # extract some data from zeroconf
-        self.host = discovery_info.host
-        _LOGGER.debug("Zeroconf discovered: %s", discovery_info)
+        if discovery_info.hostname.lower().startswith("onkyo"):
+            # Found possible Onkyo receiver
+            if discovery_info.ip_address.version != 4:
+                return self.async_abort(reason="Only IPv4 is supported")
+            self.host = discovery_info.host
+        else:
+            return self.async_abort(reason="Not Onkyo receiver")
+
+        _LOGGER.info("Zeroconf discovered: %s", discovery_info)
 
         # if the hostname already exists, we can stop
         self._async_abort_entries_match({CONF_HOST: self.host})
 
-        # now let's try and see if we can connect to a printer
-        receiver = None
-        for device in eiscp.eISCP.discover():
-            found_host = device.info[INFO_HOST]
-            if found_host == self.host:
+        # now let's try and see if we can connect to a receiver
+        _LOGGER.info("Onkyo connect to {}", self.host)
+        onkyo_receiver = OnkyoReceiver(self.host, hass=None)
+        try:
+            _LOGGER.info("CONNECTED")
+            onkyo_receiver.command_sync('main.power=query')
+            onkyo_receiver.command_sync('dock.receiver-information=query')
+            info = onkyo_receiver.receiver_info
+            if info:
                 _LOGGER.debug("Found host: %s", self.host)
-                receiver = device
-                break
+            else:
+                _LOGGER.debug("Host not found: %s", self.host)
+                raise ConnectionError()
 
-        if not receiver:
-            _LOGGER.debug("Host not found: %s", self.host)
-            raise ConnectionError()
+            # use the MAC as unique id
+            unique_id = info.macaddress
+            model_name = info.model
 
-        info = receiver.info
+            # check if we got something
+            if not unique_id:
+                return self.async_abort(reason="unsupported_model")
 
-        # use the MAC as unique id
-        unique_id = info[INFO_IDENTIFIER]
-        model_name = info[INFO_MODEL_NAME]
+            # set the unique id for the entry, abort if it already exists
+            await self.async_set_unique_id(unique_id)
+            self._abort_if_unique_id_configured()
 
-        # check if we got something
-        if not unique_id:
-            self.async_abort(reason="unsupported_model")
-
-        # set the unique id for the entry, abort if it already exists
-        await self.async_set_unique_id(unique_id)
-        self._abort_if_unique_id_configured()
-
-        # store the data for the next step to get confirmation
-        self.context.update(
-            {
-                "title_placeholders": {
-                    CONF_NAME: model_name,
-                    CONF_SCAN_INTERVAL: POLLING_INTERVAL,
+            # store the data for the next step to get confirmation
+            self.context.update(
+                {
+                    "title_placeholders": {
+                        CONF_NAME: model_name,
+                        CONF_SCAN_INTERVAL: POLLING_INTERVAL,
+                    }
                 }
-            }
-        )
+            )
 
-        # show the form to the user
-        return await self.async_step_zeroconf_confirm()
+            # show the form to the user
+            return await self.async_step_zeroconf_confirm()
+        except:
+            return self.async_abort(reason="Exception during zeroconf flow")
+        finally:
+            onkyo_receiver.disconnect()
 
     async def async_step_zeroconf_confirm(
         self, user_input: dict[str, Any] = None

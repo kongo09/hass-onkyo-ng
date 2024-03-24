@@ -1,6 +1,7 @@
 """The Onkyo AV receiver component."""
 from __future__ import annotations
 from datetime import timedelta
+from typing import Any
 
 from .const import *
 
@@ -37,10 +38,22 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             receiver_max_volume=ONKYO_DEFAULT_RECEIVER_MAX_VOLUME,
         )
         await onkyo_receiver.load_data()
-        name = onkyo_receiver._receiver_info["model"]
-        serial = onkyo_receiver._receiver_info["serial"]
-        productid = onkyo_receiver._receiver_info["productid"]
-        macaddress = onkyo_receiver._receiver_info["macaddress"]
+
+        retries = 3
+        receiver_info = None
+        while receiver_info is None and retries > 0:
+            retries -= 1
+            try:
+                receiver_info = onkyo_receiver.receiver_info
+            except Exception as error:
+                _LOGGER.error("Error getting receiver information", error)
+                raise error
+
+        _LOGGER.info(receiver_info)
+        name = receiver_info.model
+        serial = receiver_info.serial
+        productid = receiver_info.productid
+        macaddress = receiver_info.macaddress
         _LOGGER.debug("Found %s (Serial: %s) (Product ID: %s) (Mac Address: %s)", name, serial, productid, macaddress)
     except (ConnectionError) as error:
         _LOGGER.error("Cannot load data with error: %s", error)
@@ -69,10 +82,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry):
     """Unload a config entry."""
 
+    hass_data: dict[str, Any] = hass.data[DOMAIN]
+    receiver: OnkyoReceiver = hass_data[entry.entry_id].onkyo_receiver
+
     for p in PLATFORMS:
         await hass.config_entries.async_forward_entry_unload(entry, p)
 
-    hass.data[DOMAIN].pop(entry.entry_id)
+    hass_data.pop(entry.entry_id)
+    receiver.disconnect()
 
     return True
 
@@ -87,13 +104,13 @@ class OnkyoDataUpdateCoordinator(DataUpdateCoordinator):
         update_interval: timedelta,
     ) -> None:
         """Initialize."""
-        self._onkyo_receiver = onkyo_receiver
-        self._onkyo_receiver.register_listener(self.receive_data)
+        self.onkyo_receiver: OnkyoReceiver = onkyo_receiver
+        self.onkyo_receiver.register_listener(self.receive_data)
         super().__init__(hass, _LOGGER, name=DOMAIN, update_interval=update_interval)
-        self._onkyo_receiver.update()
+        self.onkyo_receiver.update()
 
     def receive_data(self, data):
-        _LOGGER.info(f"Data: {data}")
+        _LOGGER.debug(f"Data: {data}")
         self.async_set_updated_data(data)
 
     async def _async_update_data(self) -> dict:
@@ -101,8 +118,8 @@ class OnkyoDataUpdateCoordinator(DataUpdateCoordinator):
         data = {}
         try:
             # Ask the library to reload fresh data
-            self._onkyo_receiver.update()
-            return self._onkyo_receiver.data
+            self.onkyo_receiver.update()
+            return self.onkyo_receiver.data
         except (ConnectionError) as error:
             raise UpdateFailed(error) from error
 
