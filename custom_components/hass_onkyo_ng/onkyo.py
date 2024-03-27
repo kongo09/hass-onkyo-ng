@@ -1,4 +1,6 @@
 from __future__ import annotations
+
+import asyncio
 from collections import defaultdict
 from eiscp.core import Receiver, command_to_iscp, iscp_to_command
 from eiscp.commands import COMMAND_MAPPINGS
@@ -107,6 +109,7 @@ class OnkyoReceiver:
         self._sync_pending: threading.Event = None
         self._sync_command_prefix: str = None
         self._sync_result = None
+        self._hass = hass
         if hass:
             self._storage = Store[dict[str, Any]](hass, 1, f'onkyo_{host}')
         else:
@@ -233,11 +236,16 @@ class OnkyoReceiver:
                 _LOGGER.warning(f"Ignoring zone {zone}")
         except ValueError:
             _LOGGER.debug(f"Cannot decode raw message: {message}")
+
         if updates:
             dict_merge(self.data, updates)
-            _LOGGER.debug(f"Dispatch data to {len(self.listeners)} listeners")
-            for listener in self.listeners:
-                listener(self.data)
+            if self._hass:
+                _LOGGER.debug(f"Dispatch data to {len(self.listeners)} listeners")
+                for listener in self.listeners:
+                    asyncio.run_coroutine_threadsafe(listener(self.data), self._hass.loop)
+            else:
+                _LOGGER.warning("Update lost (no event loop)")
+
         if self._sync_pending:
             _LOGGER.debug(f"Received {message} whilst waiting for sync response {self._sync_command_prefix}")
             if self._sync_command_prefix == message[:3]:

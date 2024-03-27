@@ -109,7 +109,7 @@ class OnkyoDataUpdateCoordinator(DataUpdateCoordinator):
         super().__init__(hass, _LOGGER, name=DOMAIN, update_interval=update_interval)
         self.onkyo_receiver.update()
 
-    def receive_data(self, data):
+    async def receive_data(self, data):
         _LOGGER.debug(f"Data: {data}")
         self.async_set_updated_data(data)
 
