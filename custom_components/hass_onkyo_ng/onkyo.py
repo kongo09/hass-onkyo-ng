@@ -95,7 +95,6 @@ class OnkyoReceiver:
         self._host = host
         self._receiver = Receiver(host)
         self._receiver.on_message = lambda msg: self._on_message_async(msg)
-        self._reverse_source_mapping = {}
         self._reverse_sound_mode_mapping = {}
         self._receiver_info = None
         self._max_volume = max_volume
@@ -151,13 +150,8 @@ class OnkyoReceiver:
             _LOGGER.info(f"Loaded data {data}")
             if data:
                 main_zone = data.get('zone_main', {})
-                self._reverse_source_mapping = main_zone.get('reverse_source_mapping', {})
                 self._reverse_sound_mode_mapping = main_zone.get('reverse_sound_mode_mapping', {})
-                self.data[ATTR_SOURCES] = list(self._reverse_source_mapping.keys())
                 self.data[ATTR_SOUND_MODES] = list(self._reverse_sound_mode_mapping.keys())
-                #self._receiver_info = data.get('receiver_information', {})
-                #self.data[ATTR_RECEIVER_INFORMATION] = self._receiver_info
-
                 for listener in self.listeners:
                     listener(self.data)
 
@@ -168,7 +162,6 @@ class OnkyoReceiver:
     def _data_to_save(self):
         data = {
             'zone_main': {
-                'reverse_source_mapping': self._reverse_source_mapping,
                 'reverse_sound_mode_mapping': self._reverse_sound_mode_mapping,
             },
         }
@@ -297,9 +290,6 @@ class OnkyoReceiver:
             "picture_mode": self._tuple_get(values, 8),
         }
         return info
-
-
-        return data
 
     def raw(self, command):
         """Send a raw command."""
