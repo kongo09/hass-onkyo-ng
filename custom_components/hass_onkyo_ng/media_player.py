@@ -93,12 +93,6 @@ class OnkyoMediaPlayer(OnkyoReceiverEntity, MediaPlayerEntity):
         self._receiver_max_volume = self._onkyo_receiver._receiver_max_volume
         self._attr_source_list = [source.name for source in zone.sources]
 
-        # prepare source list
-        self._reverse_source_mapping = self._onkyo_receiver._reverse_source_mapping
-        source = coordinator.data.get(self._zone_key, {}).get(ATTR_SOURCE)
-        if source and source in self._reverse_source_mapping:
-            self._attr_source = self._reverse_source_mapping[source]
-
         # prepare sound mode list
         self._reverse_sound_mode_mapping = self._onkyo_receiver._reverse_sound_mode_mapping
         sound_mode = coordinator.data.get(self._zone_key, {}).get(ATTR_SOUND_MODE)
@@ -236,8 +230,8 @@ class OnkyoMediaPlayer(OnkyoReceiverEntity, MediaPlayerEntity):
 
     def play_media(self, media_type: str, media_id: str, **kwargs: Any) -> None:
         """Play radio station by preset number."""
-        source = self._reverse_source_mapping[self._attr_source]
-        if media_type.lower() == "radio" and source in DEFAULT_PLAYABLE_SOURCES:
+        source = self._attr_source
+        if media_type.lower() == "radio" and source.lower() in DEFAULT_PLAYABLE_SOURCES:
             self._onkyo_receiver.command(f"{self._zone_name}.preset={media_id}")
 
     def select_output(self, output):
