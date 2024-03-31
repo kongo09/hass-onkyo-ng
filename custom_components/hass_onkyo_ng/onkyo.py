@@ -12,6 +12,7 @@ import threading
 import logging
 from typing import Any, List
 import xml.etree.ElementTree as ET
+import re
 
 _LOGGER = logging.getLogger(__name__)
 _ZONE_NAMES = ("main", "zone2", "zone3", "zone4")
@@ -215,6 +216,11 @@ class OnkyoReceiver:
                         updates[ATTR_SOUND_MODES] = list(self._reverse_sound_mode_mapping.keys())
                         self.store_data()
                     updates[zone_key][ATTR_SOUND_MODE] = sound_mode
+                elif command == 'fl-display-information':
+                    data = b''
+                    for c in re.findall('..', message[3:]):
+                        data += int(c, 16).to_bytes(1)
+                    updates[zone_key][ATTR_DISPLAY] = data.decode('utf-8')
             elif zone == 'dock':
                 if command == "receiver-information":
                     _LOGGER.debug("Got receiver info. Parsing")

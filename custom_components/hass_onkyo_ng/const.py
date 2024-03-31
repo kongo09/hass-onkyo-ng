@@ -25,6 +25,7 @@ ATTR_PRESET = "preset"
 ATTR_NAME = "name"
 ATTR_IDENTIFIER = "identifier"
 ATTR_RECEIVER_INFORMATION = "receiver_information"
+ATTR_DISPLAY = "display"
 
 DEFAULT_NAME = "Onkyo Receiver"
 ONKYO_SUPPORTED_MAX_VOLUME = 100
