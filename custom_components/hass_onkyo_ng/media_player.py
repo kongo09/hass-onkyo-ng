@@ -54,7 +54,12 @@ async def async_setup_entry(
 
     coordinator = hass.data[DOMAIN][entry.entry_id]
     receiver: OnkyoReceiver = coordinator.onkyo_receiver
-    zones = receiver.receiver_info.zones
+
+    receiver_info = await receiver.get_receiver_info()
+    receiver_basic_info = await receiver.get_basic_receiver_info()
+
+    zones = receiver_info.zones if receiver_info else receiver_basic_info.zones
+    _LOGGER.info(f"Creating mediaplayer entities for zones: {zones}")
 
     # Create a media player entity for each supported zone
     for zone in zones:
@@ -93,12 +98,6 @@ class OnkyoMediaPlayer(OnkyoReceiverEntity, MediaPlayerEntity):
         self._receiver_max_volume = self._onkyo_receiver._receiver_max_volume
         self._attr_source_list = [source.name for source in zone.sources]
 
-        # prepare sound mode list
-        self._reverse_sound_mode_mapping = self._onkyo_receiver._reverse_sound_mode_mapping
-        sound_mode = coordinator.data.get(self._zone_key, {}).get(ATTR_SOUND_MODE)
-        if sound_mode and sound_mode in self._reverse_sound_mode_mapping:
-            self._attr_sound_mode = self._reverse_sound_mode_mapping[sound_mode]
-
         self._attr_extra_state_attributes = {}
         self._hdmi_out_supported = True
         self._audio_info_supported = True
@@ -132,7 +131,7 @@ class OnkyoMediaPlayer(OnkyoReceiverEntity, MediaPlayerEntity):
     @property
     def sound_mode_list(self) -> list[str] | None:
         """List of available sound modes"""
-        return self.coordinator.data[ATTR_SOUND_MODES]
+        return self.zone_data[ATTR_SOUND_MODES]
 
     @property
     def sound_mode(self) -> str | None:
@@ -225,8 +224,7 @@ class OnkyoMediaPlayer(OnkyoReceiverEntity, MediaPlayerEntity):
 
     def select_sound_mode(self, sound_mode: str) -> None:
         """Set the sound mode."""
-        if self._reverse_sound_mode_mapping and sound_mode in self._reverse_sound_mode_mapping:
-            self._onkyo_receiver.command(f"{self._zone_name}.listening-mode={self._reverse_sound_mode_mapping[sound_mode]}")
+        self._onkyo_receiver.select_sound_mode(self._zone, sound_mode)
 
     def play_media(self, media_type: str, media_id: str, **kwargs: Any) -> None:
         """Play radio station by preset number."""
