@@ -26,7 +26,7 @@ class OnkyoReceiver:
             self.volmax: int | None = None
             self.sources: List[OnkyoReceiver.ReceiverSource] = []
 
-        def __str__(self):
+        def __repr__(self):
             return f"ReceiverZone(id: {self.id}, name: {self.name})"
 
     class ReceiverSource:
@@ -35,9 +35,8 @@ class OnkyoReceiver:
             self.name: str | None = None
             self.zones: List[OnkyoReceiver.ReceiverZone] = []
 
-        def __str__(self):
+        def __repr__(self):
             return f"ReceiverSource(id: {self.id:02x}, name: {self.name})"
-
 
     class ReceiverInfo:
         def __init__(self):
@@ -48,7 +47,7 @@ class OnkyoReceiver:
             self.zones: List[OnkyoReceiver.ReceiverZone] = []
             self.sources: List[OnkyoReceiver.ReceiverSource] = []
 
-        def __str__(self):
+        def __repr__(self):
             return f"ReceiverInfo(model: {self.model}, serial: {self.serial}, productid: {self.productid}, macaddress: {self.macaddress}, zones: {self.zones}, sources: {self.sources})"
 
         def parse_xml(self, receiver_information_xml: str):
@@ -86,20 +85,22 @@ class OnkyoReceiver:
                             zone_map[zone_id].sources.append(receiver_source)
                     self.sources.append(receiver_source)
 
-    class ReceiverBasicInfo:
-        def __init__(self):
-            self.deviceid: str | None = None
+    class DefaultReceiverInfo:
+        def __init__(self, model: str, serial: str):
+            self.model: str = model
+            self.serial: str = serial
+            self.macaddress: str = serial
+            self.productid = "N/A"
             self.zones: List[OnkyoReceiver.ReceiverZone] = []
             self.sources: List[OnkyoReceiver.ReceiverSource] = []
+            self._setup()
 
-        def parse_xml(self, receiver_information_xml: str):
-            data = ET.fromstring(receiver_information_xml)
-            self.deviceid = data.find('deviceid').text
+        def _setup(self):
             source_selector_cmd = {'main': 'SLI', 'zone2': 'SLZ', 'zone3': 'SL3', 'zone4': 'SL4'}
             source_mapping = {}
-            for zone in data.find('zonelist').findall('zone'):
+            for zone_id in range(1, 5):
                 receiver_zone = OnkyoReceiver.ReceiverZone()
-                receiver_zone.id = int(zone.attrib['id'], 16)
+                receiver_zone.id = zone_id
                 receiver_zone.name = "main" if receiver_zone.id == 1 else "zone" + str(receiver_zone.id)
                 self.zones.append(receiver_zone)
 
@@ -133,8 +134,7 @@ class OnkyoReceiver:
         self._receiver.on_message = lambda msg: self._on_message_async(msg)
         self._sound_modes = {}
         self._retrieved_receiver_info: bool = False
-        self._receiver_info: OnkyoReceiver.ReceiverInfo | None = None
-        self._receiver_basic_info: OnkyoReceiver.ReceiverBasicInfo | None = None
+        self._receiver_info: OnkyoReceiver.ReceiverInfo | OnkyoReceiver.DefaultReceiverInfo | None = None
         self._receiver_udp_info = None
         self._max_volume = max_volume
         self._receiver_max_volume = receiver_max_volume
@@ -175,7 +175,6 @@ class OnkyoReceiver:
             while retries > 0:
                 tasks = []
                 tasks.append(asyncio.create_task(self.command_async('dock.receiver-information=query')))
-                tasks.append(asyncio.create_task(self.raw_async('MDIQSTN')))
                 tasks.append(asyncio.create_task(self.command_udp_info()))
                 done, pending = await asyncio.wait(tasks, timeout=2)
                 for coroutine in pending:
@@ -184,14 +183,13 @@ class OnkyoReceiver:
                 if len(pending) == 0:
                     break
                 retries -= 1
+            if not self._receiver_info and self._receiver_udp_info:
+                udp_info = self._receiver_udp_info
+                self._receiver_info = OnkyoReceiver.DefaultReceiverInfo(udp_info['model_name'], udp_info['identifier'])
 
     async def get_receiver_info(self) -> OnkyoReceiver.ReceiverInfo:
         await self.get_all_receiver_info()
         return self._receiver_info
-
-    async def get_basic_receiver_info(self) -> OnkyoReceiver.ReceiverBasicInfo:
-        await self.get_all_receiver_info()
-        return self._receiver_basic_info
 
     async def get_udp_receiver_info(self):
         await self.get_all_receiver_info()
@@ -289,13 +287,6 @@ class OnkyoReceiver:
                 _LOGGER.warning(f"Ignoring zone {zone}")
         except ValueError:
             _LOGGER.debug(f"Cannot decode raw message: {message}")
-            if message[:3] == "MDI":
-                _LOGGER.debug("Got receiver basic info. Parsing")
-                info = OnkyoReceiver.ReceiverBasicInfo()
-                info.parse_xml(message[3:])
-                self._receiver_basic_info = info
-                updates[ATTR_IDENTIFIER] = info.deviceid
-                self.store_data()
 
         if updates:
             dict_merge(self.data, updates)
@@ -396,6 +387,7 @@ class OnkyoReceiver:
         result_raw = await asyncio.wait_for(self.raw_async(raw_command), timeout)
         result = iscp_to_command(result_raw)
         _LOGGER.debug(f"Result: {result}")
+        return result
 
     async def command_udp_info(self):
         retries = 5
@@ -403,7 +395,8 @@ class OnkyoReceiver:
             retries -= 1
             # This only waits 0.1 seconds and may miss the response, so retry a few times
             self._receiver_udp_info = self._receiver.info
-            self.data[ATTR_NAME] = self._receiver_udp_info['model_name']
+            if self._receiver_udp_info:
+                self.data[ATTR_NAME] = self._receiver_udp_info['model_name']
         return self._receiver_udp_info
 
     def select_source(self, zone: ReceiverZone, source_id: int):

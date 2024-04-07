@@ -40,27 +40,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         await onkyo_receiver.load_data()
 
         receiver_info = await onkyo_receiver.get_receiver_info()
-        basic_receiver_info = await onkyo_receiver.get_basic_receiver_info()
-        udp_receiver_info =  await onkyo_receiver.get_udp_receiver_info()
 
         if not receiver_info:
             _LOGGER.error("Error getting receiver information")
-        if not basic_receiver_info:
-            _LOGGER.error("Error getting basic receiver information")
-        if not udp_receiver_info:
-            _LOGGER.error("Error getting basic receiver information via UDP")
-
-        _LOGGER.info(receiver_info)
-        _LOGGER.info(basic_receiver_info)
-        _LOGGER.info(udp_receiver_info)
-        if (not receiver_info) or (not udp_receiver_info and not basic_receiver_info):
-            _LOGGER.error("Could not retrieve enough receiver information")
             return False
 
-        name = receiver_info.model if receiver_info else udp_receiver_info['model_name']
-        serial = receiver_info.serial if receiver_info else udp_receiver_info['identifier']
-        productid = receiver_info.productid if receiver_info else "N/A"
-        macaddress = receiver_info.macaddress if receiver_info else udp_receiver_info['identifier']
+        _LOGGER.info(receiver_info)
+
+        name = receiver_info.model
+        serial = receiver_info.serial
+        productid = receiver_info.productid
+        macaddress = receiver_info.macaddress
         _LOGGER.debug("Found %s (Serial: %s) (Product ID: %s) (Mac Address: %s)", name, serial, productid, macaddress)
     except (ConnectionError) as error:
         _LOGGER.error("Cannot load data with error: %s", error)

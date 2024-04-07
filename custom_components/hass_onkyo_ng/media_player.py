@@ -56,13 +56,14 @@ async def async_setup_entry(
     receiver: OnkyoReceiver = coordinator.onkyo_receiver
 
     receiver_info = await receiver.get_receiver_info()
-    receiver_basic_info = await receiver.get_basic_receiver_info()
+    if not receiver_info:
+        _LOGGER.error("Could not retrieve receiver info")
+        return False
 
-    zones = receiver_info.zones if receiver_info else receiver_basic_info.zones
-    _LOGGER.info(f"Creating mediaplayer entities for zones: {zones}")
+    _LOGGER.info(f"Creating mediaplayer entities for zones: {receiver_info.zones}")
 
     # Create a media player entity for each supported zone
-    for zone in zones:
+    for zone in receiver_info.zones:
         _LOGGER.info(f"Set up Onkyo zone: {zone.name}")
         entities.append(OnkyoMediaPlayer(coordinator, zone))
 
