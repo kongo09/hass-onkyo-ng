@@ -4,7 +4,6 @@ from datetime import timedelta
 from typing import Any
 
 from .const import *
-
 from homeassistant.core import HomeAssistant
 from homeassistant.const import CONF_HOST, CONF_SCAN_INTERVAL
 from homeassistant.config_entries import ConfigEntry

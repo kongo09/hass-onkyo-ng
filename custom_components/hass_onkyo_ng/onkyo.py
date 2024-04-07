@@ -396,6 +396,7 @@ class OnkyoReceiver:
         result_raw = await asyncio.wait_for(self.raw_async(raw_command), timeout)
         result = iscp_to_command(result_raw)
         _LOGGER.debug(f"Result: {result}")
+        return result
 
     async def command_udp_info(self):
         retries = 5

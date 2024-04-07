@@ -1,0 +1,31 @@
+onkyo_send_command:
+    name: Onkyo send custom command
+    description: Send a custom command to the Onkyo receiver
+    target:
+        entity:
+            integration: hass_onkyo_ng
+            domain: media_player
+    fields:
+        command:
+            name: Command
+            description: The command to send to the receiver
+            required: true
+            example: main.power=query
+            selector:
+                text:
+
+onkyo_send_raw_command:
+    name: Onkyo send custom raw command
+    description: Send a custom raw command to the Onkyo receiver
+    target:
+        entity:
+            integration: hass_onkyo_ng
+            domain: media_player
+    fields:
+        command:
+            name: Command
+            description: The raw command to send to the receiver
+            required: true
+            example: PWRQSTN
+            selector:
+                text:
