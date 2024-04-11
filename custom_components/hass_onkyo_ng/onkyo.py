@@ -255,7 +255,10 @@ class OnkyoReceiver:
                 elif command in ["audio-muting", "muting"]:
                     updates[zone_key][ATTR_MUTE] = attrib == "on"
                 elif command in ("master-volume", "volume"):
-                    updates[zone_key][ATTR_VOLUME] = attrib / (self._receiver_max_volume * self._max_volume / 100)
+                    if attrib == 'N/A':
+                        updates[zone_key][ATTR_VOLUME] = 0.0
+                    else:
+                        updates[zone_key][ATTR_VOLUME] = attrib / (self._receiver_max_volume * self._max_volume / 100)
                 elif command in ["input-selector", "selector"]:
                     source_id = int(message[-2:], 16)
                     updates[zone_key][ATTR_SOURCE] = source_id
