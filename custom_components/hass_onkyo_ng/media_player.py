@@ -174,6 +174,9 @@ class OnkyoMediaPlayer(OnkyoReceiverEntity, MediaPlayerEntity):
         if ATTR_HDMI_OUT in data:
             extra_state_attributes[ATTR_HDMI_OUT] = data[ATTR_HDMI_OUT]
 
+        if ATTR_DISPLAY in data:
+            extra_state_attributes[ATTR_DISPLAY] = data[ATTR_DISPLAY]
+
         return extra_state_attributes
 
     def turn_off(self) -> None:
