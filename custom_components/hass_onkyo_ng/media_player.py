@@ -4,8 +4,10 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
+import voluptuous as vol
 from . import OnkyoDataUpdateCoordinator, OnkyoReceiverEntity
-
+from homeassistant.core import SupportsResponse
+from homeassistant.helpers import entity_platform, config_validation as cv
 from homeassistant.components.media_player import (
     MediaPlayerEntity,
     MediaPlayerEntityFeature,
@@ -18,6 +20,7 @@ from homeassistant.util import slugify
 from .onkyo import OnkyoReceiver
 
 import logging
+import asyncio
 
 from .const import *
 
@@ -43,12 +46,31 @@ SUPPORT_ONKYO = (
 DEFAULT_PLAYABLE_SOURCES = ("fm", "am", "tuner")
 
 
+def add_services():
+    platform = entity_platform.async_get_current_platform()
+    platform.async_register_entity_service(
+        "onkyo_send_command",
+        {
+            vol.Required('command'): cv.string
+        },
+        OnkyoMediaPlayer.send_command.__name__,
+        supports_response=SupportsResponse.ONLY
+    )
+    platform.async_register_entity_service(
+        "onkyo_send_raw_command",
+        {
+            vol.Required('command'): cv.string
+        },
+        OnkyoMediaPlayer.send_raw_command.__name__,
+        supports_response=SupportsResponse.ONLY
+    )
+
 async def async_setup_entry(
     hass: HomeAssistantType, entry: ConfigEntry, async_add_entities: Callable
 ):
     """Setup media player entity."""
-
     _LOGGER.debug("async_setup_entry called")
+    add_services()
 
     entities = []
 
@@ -238,3 +260,15 @@ class OnkyoMediaPlayer(OnkyoReceiverEntity, MediaPlayerEntity):
     def select_output(self, output):
         """Set hdmi-out."""
         self._onkyo_receiver.command(f"{self._zone_name}.hdmi-output-selector={output}")
+
+    async def send_command(self, command):
+        result = await asyncio.wait_for(self._onkyo_receiver.command_async(command), 5.0)
+        return {
+            'result': result
+        }
+
+    async def send_raw_command(self, command):
+        result = await asyncio.wait_for(self._onkyo_receiver.raw_async(command), 5.0)
+        return {
+            'result': result
+        }
