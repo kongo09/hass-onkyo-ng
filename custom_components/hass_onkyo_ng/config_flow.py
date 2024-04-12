@@ -78,11 +78,6 @@ class OnkyoReceiverConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 _LOGGER.debug("Retrieved receiver information")
                 return info.macaddress, info.model
 
-            udp_info = await onkyo_receiver.get_udp_receiver_info()
-            if udp_info:
-                _LOGGER.debug("Found receiver basic information")
-                return udp_info['identifier'], udp_info['model_name']
-
             raise UnsupportedModel()
         finally:
             onkyo_receiver.disconnect()
