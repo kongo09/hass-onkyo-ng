@@ -40,27 +40,28 @@ class OnkyoReceiver:
             return f"ReceiverSource(id: {self.id:02x}, name: {self.name})"
 
     class ReceiverInfo:
-        def __init__(self):
-            self.model: str | None = None
-            self.serial: str | None = None
-            self.productid: str | None = None
-            self.macaddress: str | None = None
-            self.zones: List[OnkyoReceiver.ReceiverZone] = []
-            self.sources: List[OnkyoReceiver.ReceiverSource] = []
+        def __init__(self, model: str, serial: str, productid: str, macaddress: str, zones: List[OnkyoReceiver.ReceiverZone], sources: List[OnkyoReceiver.ReceiverSource]):
+            self.model = model
+            self.serial = serial
+            self.productid = productid
+            self.macaddress = macaddress
+            self.zones = zones
+            self.sources = sources
 
         def __repr__(self):
             return f"ReceiverInfo(model: {self.model}, serial: {self.serial}, productid: {self.productid}, macaddress: {self.macaddress}, zones: {self.zones}, sources: {self.sources})"
 
-        def parse_xml(self, receiver_information_xml: str):
+        @staticmethod
+        def from_xml(receiver_information_xml: str):
             data = ET.fromstring(receiver_information_xml)
             device = data.find('device')
-            self.model = device.find('model').text
-            self.serial = device.find('deviceserial').text
-            self.productid = device.find('productid').text
-            self.macaddress = device.find('macaddress').text
+            model = device.find('model').text
+            serial = device.find('deviceserial').text
+            productid = device.find('productid').text
+            macaddress = device.find('macaddress').text
 
             zone_map = {}
-            self.zones = []
+            zones = []
             for zone in device.find('zonelist').findall('zone'):
                 if int(zone.attrib['value']) > 0:
                     receiver_zone = OnkyoReceiver.ReceiverZone()
@@ -69,9 +70,9 @@ class OnkyoReceiver:
                     receiver_zone.volmax = int(zone.attrib['volmax'])
 
                     zone_map[receiver_zone.id] = receiver_zone
-                    self.zones.append(receiver_zone)
+                    zones.append(receiver_zone)
 
-            self.sources = []
+            sources = []
             for source in device.find('selectorlist').findall('selector'):
                 if int(source.attrib['value']) > 0:
                     receiver_source = OnkyoReceiver.ReceiverSource()
@@ -84,26 +85,19 @@ class OnkyoReceiver:
                         if source_zones & (1 << (zone_id - 1)):
                             receiver_source.zones.append(zone_map[zone_id])
                             zone_map[zone_id].sources.append(receiver_source)
-                    self.sources.append(receiver_source)
+                    sources.append(receiver_source)
+            return OnkyoReceiver.ReceiverInfo(model, serial, productid, macaddress, zones, sources)
 
-    class DefaultReceiverInfo:
-        def __init__(self, model: str, serial: str):
-            self.model: str = model
-            self.serial: str = serial
-            self.macaddress: str = serial
-            self.productid = "N/A"
-            self.zones: List[OnkyoReceiver.ReceiverZone] = []
-            self.sources: List[OnkyoReceiver.ReceiverSource] = []
-            self._setup()
-
-        def _setup(self):
+        @staticmethod
+        def default(model: str, serial: str):
             source_selector_cmd = {'main': 'SLI', 'zone2': 'SLZ', 'zone3': 'SL3', 'zone4': 'SL4'}
             source_mapping = {}
+            zones = []
             for zone_id in range(1, 5):
                 receiver_zone = OnkyoReceiver.ReceiverZone()
                 receiver_zone.id = zone_id
                 receiver_zone.name = "main" if receiver_zone.id == 1 else "zone" + str(receiver_zone.id)
-                self.zones.append(receiver_zone)
+                zones.append(receiver_zone)
 
                 # For now, provide a list of all zones available in the commands
                 source_command_args = COMMANDS[receiver_zone.name][source_selector_cmd[receiver_zone.name]]['values']
@@ -122,6 +116,9 @@ class OnkyoReceiver:
                         receiver_source.zones.append(receiver_zone)
                         receiver_zone.sources.append(receiver_source)
 
+            return OnkyoReceiver.ReceiverInfo(model, serial, 'N/A', serial, zones, source_mapping.values())
+
+
     def __init__(
         self,
         host: str,
@@ -135,7 +132,7 @@ class OnkyoReceiver:
         self._receiver.on_message = lambda msg: self._on_message_async(msg)
         self._sound_modes = {}
         self._retrieved_receiver_info: bool = False
-        self._receiver_info: OnkyoReceiver.ReceiverInfo | OnkyoReceiver.DefaultReceiverInfo | None = None
+        self._receiver_info: OnkyoReceiver.ReceiverInfo | None = None
         self._receiver_udp_info = None
         self._max_volume = max_volume
         self._receiver_max_volume = receiver_max_volume
@@ -186,7 +183,7 @@ class OnkyoReceiver:
                 retries -= 1
             if not self._receiver_info and self._receiver_udp_info:
                 udp_info = self._receiver_udp_info
-                self._receiver_info = OnkyoReceiver.DefaultReceiverInfo(udp_info['model_name'], udp_info['identifier'])
+                self._receiver_info = OnkyoReceiver.ReceiverInfo.default(udp_info['model_name'], udp_info['identifier'])
 
     async def get_receiver_info(self) -> OnkyoReceiver.ReceiverInfo:
         await self.get_all_receiver_info()
@@ -198,11 +195,11 @@ class OnkyoReceiver:
 
     async def get_zones(self) -> List[OnkyoReceiver.ReceiverZone]:
         await self.get_all_receiver_info()
-        return self._receiver_info.zones if self._receiver_info else self._receiver_basic_info.zones
+        return self._receiver_info.zones
 
     async def sources(self) -> List[OnkyoReceiver.ReceiverSource]:
         await self.get_all_receiver_info()
-        return self._receiver_info.sources if self._receiver_info else self._receiver_basic_info.sources
+        return self._receiver_info.sources
 
     async def load_data(self):
         if self._storage:
@@ -285,8 +282,7 @@ class OnkyoReceiver:
             elif zone == 'dock':
                 if command == "receiver-information":
                     _LOGGER.debug("Got receiver info. Parsing")
-                    info = OnkyoReceiver.ReceiverInfo()
-                    info.parse_xml(attrib)
+                    info = OnkyoReceiver.ReceiverInfo.from_xml(attrib)
                     self._receiver_info = info
                     updates[ATTR_RECEIVER_INFORMATION] = info
                     updates[ATTR_NAME] = info.model
