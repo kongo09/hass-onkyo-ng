@@ -29,12 +29,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # get the receiver
     update_interval = entry.data[CONF_SCAN_INTERVAL]
 
+    # Max volume setting
+    max_volume = entry.data.get(CONF_MAX_VOLUME, ONKYO_DEFAULT_RECEIVER_MAX_VOLUME)
+
     try:
         onkyo_receiver = OnkyoReceiver(
             host=host,
             hass=hass,
             max_volume=ONKYO_SUPPORTED_MAX_VOLUME,
-            receiver_max_volume=ONKYO_DEFAULT_RECEIVER_MAX_VOLUME,
+            receiver_max_volume=max_volume,
         )
         await onkyo_receiver.load_data()
 

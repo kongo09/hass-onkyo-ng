@@ -4,6 +4,8 @@ from __future__ import annotations
 DOMAIN = "hass_onkyo_ng"
 PLATFORMS = ["media_player"]
 
+CONF_MAX_VOLUME = "max_volume"
+
 POLLING_INTERVAL = 30
 
 ATTR_ZONE = "zone"

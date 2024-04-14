@@ -17,6 +17,8 @@ from .onkyo import OnkyoReceiver
 from .const import (
     DOMAIN,
     POLLING_INTERVAL,
+    CONF_MAX_VOLUME,
+    ONKYO_DEFAULT_RECEIVER_MAX_VOLUME,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -65,6 +67,11 @@ class OnkyoReceiverConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     CONF_SCAN_INTERVAL,
                     default=user_input.get(CONF_SCAN_INTERVAL, POLLING_INTERVAL),
                 ): vol.All(cv.positive_int, vol.Range(min=10, max=600)),
+                # Some receivers use 0-80, some 0-100, and some 0-200 (0-100 but in 0.5 increments)
+                vol.Required(
+                    CONF_MAX_VOLUME,
+                    default=user_input.get(CONF_MAX_VOLUME, ONKYO_DEFAULT_RECEIVER_MAX_VOLUME),
+                ): vol.All(cv.positive_int, vol.Range(min=10, max=200)),
             }
         )
         return schema
