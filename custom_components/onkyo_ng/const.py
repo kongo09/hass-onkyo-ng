@@ -6,7 +6,7 @@ from typing import ClassVar, Literal, Self
 
 import pyeiscp
 
-DOMAIN = "onkyo"
+DOMAIN = "onkyo_ng"
 
 DEVICE_INTERVIEW_TIMEOUT = 5
 DEVICE_DISCOVERY_TIMEOUT = 5
