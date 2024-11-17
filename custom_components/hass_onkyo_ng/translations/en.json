@@ -1,34 +1,60 @@
 {
-  "title": "Onkyo AV Receiver",
   "config": {
-    "step": {
-      "user": {
-        "title": "New Onkyo receiver",
-        "data": {
-          "name": "Entry name (optional)",
-          "host": "Receiver hostname or IP address",
-          "scan_interval": "State polling interval (seconds)"
-        }
-      },
-      "zeroconf_confirm": {
-        "title": "New Onkyo receiver discovered",
-        "description": "{model}",
-        "data": {
-          "name": "Entry name (optional)",
-          "scan_interval": "State polling interval (seconds)"
-        }
-      }
+    "abort": {
+      "already_configured": "Device is already configured",
+      "no_devices_found": "No devices found on the network",
+      "reconfigure_successful": "Re-configuration was successful",
+      "unique_id_mismatch": "The serial number of the device does not match the previous serial number",
+      "unknown": "Unexpected error"
     },
     "error": {
-      "no_receiver_url": "Receiver address is required"
+      "cannot_connect": "Failed to connect",
+      "empty_input_source_list": "Input source list cannot be empty",
+      "empty_listening_mode_list": "Listening mode list cannot be empty",
+      "unknown": "Unexpected error"
+    },
+    "step": {
+      "configure_receiver": {
+        "data": {
+          "input_sources": "List of input sources supported by the receiver",
+          "listening_modes": "List of listening modes supported by the receiver",
+          "volume_resolution": "Number of steps it takes for the receiver to go from the lowest to the highest possible volume"
+        },
+        "description": "Configure {name}"
+      },
+      "eiscp_discovery": {
+        "data": {
+          "device": "Device"
+        }
+      },
+      "manual": {
+        "data": {
+          "host": "Host"
+        }
+      },
+      "user": {
+        "menu_options": {
+          "eiscp_discovery": "Onkyo discovery",
+          "manual": "Manual entry"
+        }
+      }
+    }
+  },
+  "issues": {
+    "deprecated_yaml_import_issue_cannot_connect": {
+      "description": "Configuring Onkyo using YAML is being removed but there was a connection error when importing your YAML configuration for host {host}.\n\nEnsure the connection to the receiver works and restart Home Assistant to try again or remove the Onkyo YAML configuration from your configuration.yaml file and continue to [set up the integration]({url}) manually.",
+      "title": "The Onkyo YAML configuration import failed"
+    },
+    "deprecated_yaml_import_issue_no_discover": {
+      "description": "Configuring Onkyo using YAML is being removed but no receivers were discovered when importing your YAML configuration.\n\nEnsure the connection to the receiver works and restart Home Assistant to try again or remove the Onkyo YAML configuration from your configuration.yaml file and continue to [set up the integration]({url}) manually.",
+      "title": "The Onkyo YAML configuration import failed"
     }
   },
   "options": {
     "step": {
-      "options": {
-        "title": "Configure Onkyo receiver",
+      "init": {
         "data": {
-          "scan_interval": "State polling interval (seconds)"
+          "max_volume": "Maximum volume limit (%)"
         }
       }
     }

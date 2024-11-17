@@ -1,240 +1,427 @@
-"""The Onkyo NG component."""
-
-from homeassistant import config_entries, exceptions
-from homeassistant.components import zeroconf
-from homeassistant.data_entry_flow import FlowResult
-
-from homeassistant.const import CONF_HOST, CONF_NAME, CONF_SCAN_INTERVAL
-from homeassistant.helpers import config_validation as cv
-
-from typing import Any
-import ipaddress
+"""Config flow for Onkyo."""
 
 import logging
+from typing import Any
+
 import voluptuous as vol
 
-from .onkyo import OnkyoReceiver
+from homeassistant.config_entries import (
+    SOURCE_RECONFIGURE,
+    ConfigEntry,
+    ConfigFlow,
+    ConfigFlowResult,
+    OptionsFlow,
+)
+from homeassistant.const import CONF_HOST, CONF_NAME
+from homeassistant.core import callback
+from homeassistant.helpers.selector import (
+    NumberSelector,
+    NumberSelectorConfig,
+    NumberSelectorMode,
+    Selector,
+    SelectSelector,
+    SelectSelectorConfig,
+    SelectSelectorMode,
+    TextSelector,
+)
 
 from .const import (
+    CONF_MODES,
+    CONF_RECEIVER_MAX_VOLUME,
+    CONF_SOURCES,
     DOMAIN,
-    POLLING_INTERVAL,
+    OPTION_INPUT_SOURCES,
+    OPTION_LISTENING_MODES,
+    OPTION_MAX_VOLUME,
+    OPTION_MAX_VOLUME_DEFAULT,
+    OPTION_VOLUME_RESOLUTION,
+    OPTION_VOLUME_RESOLUTION_DEFAULT,
+    VOLUME_RESOLUTION_ALLOWED,
+    InputSource,
+    ListeningMode,
 )
+from .receiver import ReceiverInfo, async_discover, async_interview
 
 _LOGGER = logging.getLogger(__name__)
 
+CONF_DEVICE = "device"
 
-def host_valid(host: str) -> bool:
-    """Return True if hostname or IP address is valid."""
-    try:
-        if ipaddress.ip_address(host).version in [4, 6]:
-            return True
-    except ValueError:
-        return False
+INPUT_SOURCES_ALL_MEANINGS = [
+    input_source.value_meaning for input_source in InputSource
+]
+LISTENING_MODES_ALL_MEANINGS = [
+    listening_mode.value_meaning for listening_mode in ListeningMode
+]
+
+STEP_MANUAL_SCHEMA = vol.Schema({vol.Required(CONF_HOST): str})
+STEP_CONFIGURE_SCHEMA = vol.Schema(
+    {
+        vol.Required(OPTION_VOLUME_RESOLUTION): vol.In(VOLUME_RESOLUTION_ALLOWED),
+        vol.Required(OPTION_INPUT_SOURCES): SelectSelector(
+            SelectSelectorConfig(
+                options=INPUT_SOURCES_ALL_MEANINGS,
+                multiple=True,
+                mode=SelectSelectorMode.DROPDOWN,
+            )
+        ),
+        vol.Required(OPTION_LISTENING_MODES): SelectSelector(
+            SelectSelectorConfig(
+                options=LISTENING_MODES_ALL_MEANINGS,
+                multiple=True,
+                mode=SelectSelectorMode.DROPDOWN,
+            )
+        ),
+    }
+)
 
 
-class UnsupportedModel(Exception):
-    """Raised when no model, serial no, firmware data."""
+class OnkyoConfigFlow(ConfigFlow, domain=DOMAIN):
+    """Onkyo config flow."""
 
+    _receiver_info: ReceiverInfo
+    _discovered_infos: dict[str, ReceiverInfo]
 
-class InvalidHost(exceptions.HomeAssistantError):
-    """Error to indicate that hostname/IP address is invalid."""
-
-
-class OnkyoReceiverConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
-    """Handle config flow for Onkyo receivers."""
-
-    VERSION = 1
-
-    def __init__(self) -> None:
-        """Initialize."""
-        self.host: str = None
-        self._sources: dict[str, str] = {}
-        self._sound_modes: dict[str, str] = {}
-        self._input: dict[str, Any] = None
-
-    def _get_schema(self, user_input):
-        """Provide schema for user input."""
-        if user_input is None:
-            user_input = {}
-
-        schema = vol.Schema(
-            {
-                vol.Optional(
-                    CONF_NAME, default=user_input.get(CONF_NAME, "")
-                ): cv.string,
-                vol.Required(
-                    CONF_HOST, default=user_input.get(CONF_HOST, "")
-                ): cv.string,
-                vol.Required(
-                    CONF_SCAN_INTERVAL,
-                    default=user_input.get(CONF_SCAN_INTERVAL, POLLING_INTERVAL),
-                ): vol.All(cv.positive_int, vol.Range(min=10, max=600)),
-            }
+    async def async_step_user(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Handle a flow initialized by the user."""
+        return self.async_show_menu(
+            step_id="user", menu_options=["manual", "eiscp_discovery"]
         )
-        return schema
 
-    async def async_confirm_receiver(self, host: str) -> (str, str):
-        _LOGGER.info("Connecting to receiver: {}", host)
-        onkyo_receiver = OnkyoReceiver(host, hass=None)
-        try:
-            info = await onkyo_receiver.get_receiver_info()
-            if info:
-                _LOGGER.debug("Retrieved receiver information")
-                return info.macaddress, info.model
-
-            raise UnsupportedModel()
-        finally:
-            onkyo_receiver.disconnect()
-
-    async def async_step_user(self, user_input: dict[str, Any] = None) -> FlowResult:
-        """Handle initial step of user config flow."""
-
+    async def async_step_manual(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Handle manual device entry."""
         errors = {}
 
-        # user input was provided, so check and save it
         if user_input is not None:
+            host = user_input[CONF_HOST]
+            _LOGGER.debug("Config flow start manual: %s", host)
             try:
-                # first some sanitycheck on the host input
-                host = user_input[CONF_HOST]
-                if not host_valid(host):
-                    _LOGGER.debug("Invalid host: %s", host)
-                    raise InvalidHost()
+                info = await async_interview(host)
+            except Exception:
+                _LOGGER.exception("Unexpected exception")
+                errors["base"] = "unknown"
+            else:
+                if info is None:
+                    errors["base"] = "cannot_connect"
+                else:
+                    self._receiver_info = info
 
-                # now let's try and see if we can connect to a receiver
-                unique_id, model_name = await self.async_confirm_receiver(host)
+                    await self.async_set_unique_id(
+                        info.identifier, raise_on_progress=False
+                    )
+                    if self.source == SOURCE_RECONFIGURE:
+                        self._abort_if_unique_id_mismatch()
+                    else:
+                        self._abort_if_unique_id_configured()
 
-                # set the unique id for the entry, abort if it already exists
-                await self.async_set_unique_id(unique_id)
-                self._abort_if_unique_id_configured()
+                    return await self.async_step_configure_receiver()
 
-                # create a receiver object to scan for available sources and sound modes
-                onkyo_receiver = OnkyoReceiver(receiver=receiver)
-                self._sources = onkyo_receiver._source_mapping
-                self._sound_modes = onkyo_receiver._sound_mode_mapping
-
-                # adjust sources
-                if self._sources:
-                    self._input = user_input
-                    return await self.async_step_sources()
-
-                # compile a name from model and serial
-                return self.async_create_entry(
-                    title=user_input.get(CONF_NAME) or model_name,
-                    data={
-                        **user_input,
-                        CONF_SOURCES: self._sources,
-                        CONF_SOUND_MODES: self._sound_modes,
-                    },
-                )
-
-            except InvalidHost:
-                errors[CONF_HOST] = "Wrong host"
-            except ConnectionError:
-                errors[CONF_HOST] = "Cannot connect to device"
-            except UnsupportedModel:
-                errors["base"] = "Receiver model not supported"
-
-        # no user_input so far
-        # what to ask the user
-        schema = self._get_schema(user_input)
-
-        # show the form to the user
-        return self.async_show_form(step_id="user", data_schema=schema, errors=errors)
-
-    async def async_step_sources(self, user_input: dict[str, Any] = None) -> FlowResult:
-        """Handle the custom naming of sources."""
-        errors: dict[str, str] = {}
-        if user_input is not None:
-            pass
-        else:
-            user_input = {}
-
-        sources_list = list(self._sources.keys())
-
-        schema = vol.Schema(
-            {
-                vol.Optional(
-                    CONF_SOURCES, description={"suggested_value": sources_list}
-                ): cv.multi_select({source: source for source in sources_list}),
+        suggested_values = user_input
+        if suggested_values is None and self.source == SOURCE_RECONFIGURE:
+            suggested_values = {
+                CONF_HOST: self._get_reconfigure_entry().data[CONF_HOST]
             }
-        )
 
         return self.async_show_form(
-            step_id="sources", data_schema=schema, errors=errors
+            step_id="manual",
+            data_schema=self.add_suggested_values_to_schema(
+                STEP_MANUAL_SCHEMA, suggested_values
+            ),
+            errors=errors,
         )
 
-    async def async_step_zeroconf(
-        self, discovery_info: zeroconf.ZeroconfServiceInfo = None
-    ):
-        """Handle zeroconf flow."""
+    async def async_step_eiscp_discovery(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Start eiscp discovery and handle user device selection."""
+        if user_input is not None:
+            self._receiver_info = self._discovered_infos[user_input[CONF_DEVICE]]
+            await self.async_set_unique_id(
+                self._receiver_info.identifier, raise_on_progress=False
+            )
+            self._abort_if_unique_id_configured(
+                updates={CONF_HOST: self._receiver_info.host}
+            )
+            return await self.async_step_configure_receiver()
 
-        errors = {}
-
-        if discovery_info.hostname.lower().startswith("onkyo"):
-            # Found possible Onkyo receiver
-            if discovery_info.ip_address.version != 4:
-                return self.async_abort(reason="Only IPv4 is supported")
-            self.host = discovery_info.host
-        else:
-            return self.async_abort(reason="Not Onkyo receiver")
-
-        _LOGGER.info("Zeroconf discovered: %s", discovery_info)
-
-        # if the hostname already exists, we can stop
-        self._async_abort_entries_match({CONF_HOST: self.host})
+        _LOGGER.debug("Config flow start eiscp discovery")
 
         try:
-            # now let's try and see if we can connect to a receiver
-            _LOGGER.info("Onkyo connect to {}", self.host)
-            # now let's try and see if we can connect to a receiver
-            unique_id, model_name = await self.async_confirm_receiver(self.host)
+            infos = await async_discover()
+        except Exception:
+            _LOGGER.exception("Unexpected exception")
+            return self.async_abort(reason="unknown")
 
-            # set the unique id for the entry, abort if it already exists
-            await self.async_set_unique_id(unique_id)
-            self._abort_if_unique_id_configured()
+        _LOGGER.debug("Discovered devices: %s", infos)
 
-            # store the data for the next step to get confirmation
-            self.context.update(
-                {
-                    "title_placeholders": {
-                        CONF_NAME: model_name,
-                        CONF_SCAN_INTERVAL: POLLING_INTERVAL,
-                    }
-                }
-            )
+        self._discovered_infos = {}
+        discovered_names = {}
+        current_unique_ids = self._async_current_ids()
+        for info in infos:
+            if info.identifier in current_unique_ids:
+                continue
+            self._discovered_infos[info.identifier] = info
+            device_name = f"{info.model_name} ({info.host})"
+            discovered_names[info.identifier] = device_name
 
-            # show the form to the user
-            return await self.async_step_zeroconf_confirm()
-        except:
-            return self.async_abort(reason="Exception during zeroconf flow")
+        _LOGGER.debug("Discovered new devices: %s", self._discovered_infos)
 
-    async def async_step_zeroconf_confirm(
-        self, user_input: dict[str, Any] = None
-    ) -> FlowResult:
-        """Confirm the zeroconf discovered data."""
+        if not discovered_names:
+            return self.async_abort(reason="no_devices_found")
 
-        # user input was provided, so check and save it
-        if user_input is not None:
-            return self.async_create_entry(
-                title=user_input[CONF_NAME],
-                data={
-                    CONF_NAME: user_input[CONF_NAME],
-                    CONF_HOST: user_input[CONF_HOST],
-                    CONF_SCAN_INTERVAL: user_input[CONF_SCAN_INTERVAL],
-                },
-            )
-
-        # show the form to the user
-        name = user_input[CONF_NAME]
         return self.async_show_form(
-            step_id="zeroconf_confirm",
+            step_id="eiscp_discovery",
             data_schema=vol.Schema(
-                {
-                    vol.Optional(CONF_NAME, default=name): cv.string,
-                    vol.Required(CONF_SCAN_INTERVAL, default=POLLING_INTERVAL): vol.All(
-                        cv.positive_int, vol.Range(min=10, max=600)
-                    ),
-                }
+                {vol.Required(CONF_DEVICE): vol.In(discovered_names)}
             ),
-            description_placeholders={CONF_HOST: self.host, "model": name},
+        )
+
+    async def async_step_configure_receiver(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Handle the configuration of a single receiver."""
+        errors = {}
+
+        entry = None
+        entry_options = None
+        if self.source == SOURCE_RECONFIGURE:
+            entry = self._get_reconfigure_entry()
+            entry_options = entry.options
+
+        if user_input is not None:
+            source_meanings: list[str] = user_input[OPTION_INPUT_SOURCES]
+            mode_meanings: list[str] = user_input[OPTION_LISTENING_MODES]
+
+            if not source_meanings:
+                errors[OPTION_INPUT_SOURCES] = "empty_input_source_list"
+            elif not mode_meanings:
+                errors[OPTION_LISTENING_MODES] = "empty_listening_mode_list"
+            else:
+                sources_store: dict[str, str] = {}
+                modes_store: dict[str, str] = {}
+
+                for source_meaning in source_meanings:
+                    source = InputSource.from_meaning(source_meaning)
+
+                    source_name = source_meaning
+                    if entry_options is not None:
+                        source_name = entry_options[OPTION_INPUT_SOURCES].get(
+                            source.value, source_name
+                        )
+                    sources_store[source.value] = source_name
+
+                for mode_meaning in mode_meanings:
+                    mode = ListeningMode.from_meaning(mode_meaning)
+
+                    mode_name = mode_meaning
+                    if entry_options is not None:
+                        mode_name = entry_options[OPTION_LISTENING_MODES].get(
+                            mode.value, mode_name
+                        )
+                    modes_store[mode.value] = mode_name
+
+                volume_resolution = user_input[OPTION_VOLUME_RESOLUTION]
+
+                if entry_options is None:
+                    result = self.async_create_entry(
+                        title=self._receiver_info.model_name,
+                        data={
+                            CONF_HOST: self._receiver_info.host,
+                        },
+                        options={
+                            OPTION_VOLUME_RESOLUTION: volume_resolution,
+                            OPTION_MAX_VOLUME: OPTION_MAX_VOLUME_DEFAULT,
+                            OPTION_INPUT_SOURCES: sources_store,
+                            OPTION_LISTENING_MODES: modes_store,
+                        },
+                    )
+                else:
+                    assert entry is not None
+                    result = self.async_update_reload_and_abort(
+                        entry,
+                        data={
+                            CONF_HOST: self._receiver_info.host,
+                        },
+                        options={
+                            OPTION_VOLUME_RESOLUTION: volume_resolution,
+                            OPTION_MAX_VOLUME: entry_options[OPTION_MAX_VOLUME],
+                            OPTION_INPUT_SOURCES: sources_store,
+                            OPTION_LISTENING_MODES: modes_store,
+                        },
+                    )
+
+                _LOGGER.debug("Configured receiver, result: %s", result)
+                return result
+
+        _LOGGER.debug("Configuring receiver, info: %s", self._receiver_info)
+
+        suggested_values = user_input
+        if suggested_values is None:
+            if entry_options is None:
+                suggested_values = {
+                    OPTION_VOLUME_RESOLUTION: OPTION_VOLUME_RESOLUTION_DEFAULT,
+                    OPTION_INPUT_SOURCES: [],
+                    OPTION_LISTENING_MODES: [],
+                }
+            else:
+                suggested_values = {
+                    OPTION_VOLUME_RESOLUTION: entry_options[OPTION_VOLUME_RESOLUTION],
+                    OPTION_INPUT_SOURCES: [
+                        InputSource(input_source).value_meaning
+                        for input_source in entry_options[OPTION_INPUT_SOURCES]
+                    ],
+                    OPTION_LISTENING_MODES: [
+                        ListeningMode(listening_mode).value_meaning
+                        for listening_mode in entry_options[OPTION_LISTENING_MODES]
+                    ],
+                }
+
+        return self.async_show_form(
+            step_id="configure_receiver",
+            data_schema=self.add_suggested_values_to_schema(
+                STEP_CONFIGURE_SCHEMA, suggested_values
+            ),
+            errors=errors,
+            description_placeholders={
+                "name": f"{self._receiver_info.model_name} ({self._receiver_info.host})"
+            },
+        )
+
+    async def async_step_reconfigure(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Handle reconfiguration of the receiver."""
+        return await self.async_step_manual()
+
+    async def async_step_import(self, user_input: dict[str, Any]) -> ConfigFlowResult:
+        """Import the yaml config."""
+        _LOGGER.debug("Import flow user input: %s", user_input)
+
+        host: str = user_input[CONF_HOST]
+        name: str | None = user_input.get(CONF_NAME)
+        user_max_volume: int = user_input[OPTION_MAX_VOLUME]
+        user_volume_resolution: int = user_input[CONF_RECEIVER_MAX_VOLUME]
+        user_sources: dict[InputSource, str] = user_input[CONF_SOURCES]
+
+        info: ReceiverInfo | None = user_input.get("info")
+        if info is None:
+            try:
+                info = await async_interview(host)
+            except Exception:
+                _LOGGER.exception("Import flow interview error for host %s", host)
+                return self.async_abort(reason="cannot_connect")
+
+        if info is None:
+            _LOGGER.error("Import flow interview error for host %s", host)
+            return self.async_abort(reason="cannot_connect")
+
+        unique_id = info.identifier
+        await self.async_set_unique_id(unique_id)
+        self._abort_if_unique_id_configured()
+
+        name = name or info.model_name
+
+        volume_resolution = VOLUME_RESOLUTION_ALLOWED[-1]
+        for volume_resolution_allowed in VOLUME_RESOLUTION_ALLOWED:
+            if user_volume_resolution <= volume_resolution_allowed:
+                volume_resolution = volume_resolution_allowed
+                break
+
+        max_volume = min(
+            100, user_max_volume * user_volume_resolution / volume_resolution
+        )
+
+        sources_store: dict[str, str] = {}
+        for source, source_name in user_sources.items():
+            sources_store[source.value] = source_name
+
+        modes_store: dict[str, str] = {}
+        for mode, mode_name in user_input[CONF_MODES].items():
+            modes_store[mode.value] = mode_name
+
+        return self.async_create_entry(
+            title=name,
+            data={
+                CONF_HOST: host,
+            },
+            options={
+                OPTION_VOLUME_RESOLUTION: volume_resolution,
+                OPTION_MAX_VOLUME: max_volume,
+                OPTION_INPUT_SOURCES: sources_store,
+                OPTION_LISTENING_MODES: modes_store,
+            },
+        )
+
+    @staticmethod
+    @callback
+    def async_get_options_flow(
+        config_entry: ConfigEntry,
+    ) -> OptionsFlow:
+        """Return the options flow."""
+        return OnkyoOptionsFlowHandler(config_entry)
+
+
+class OnkyoOptionsFlowHandler(OptionsFlow):
+    """Handle an options flow for Onkyo."""
+
+    def __init__(self, config_entry: ConfigEntry) -> None:
+        """Initialize options flow."""
+        sources_store: dict[str, str] = config_entry.options[OPTION_INPUT_SOURCES]
+        self._input_sources = {InputSource(k): v for k, v in sources_store.items()}
+        modes_store: dict[str, str] = config_entry.options[OPTION_LISTENING_MODES]
+        self._listening_modes = {ListeningMode(k): v for k, v in modes_store.items()}
+
+    async def async_step_init(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Manage the options."""
+        if user_input is not None:
+            sources_store: dict[str, str] = {}
+            for source_meaning, source_name in user_input.items():
+                if source_meaning in INPUT_SOURCES_ALL_MEANINGS:
+                    source = InputSource.from_meaning(source_meaning)
+                    sources_store[source.value] = source_name
+
+            modes_store: dict[str, str] = {}
+            for mode_meaning, mode_name in user_input.items():
+                if mode_meaning in LISTENING_MODES_ALL_MEANINGS:
+                    mode = ListeningMode.from_meaning(mode_meaning)
+                    modes_store[mode.value] = mode_name
+
+            return self.async_create_entry(
+                data={
+                    OPTION_VOLUME_RESOLUTION: self.config_entry.options[
+                        OPTION_VOLUME_RESOLUTION
+                    ],
+                    OPTION_MAX_VOLUME: user_input[OPTION_MAX_VOLUME],
+                    OPTION_INPUT_SOURCES: sources_store,
+                    OPTION_LISTENING_MODES: modes_store,
+                }
+            )
+
+        schema_dict: dict[Any, Selector] = {}
+
+        max_volume: float = self.config_entry.options[OPTION_MAX_VOLUME]
+        schema_dict[vol.Required(OPTION_MAX_VOLUME, default=max_volume)] = (
+            NumberSelector(
+                NumberSelectorConfig(min=1, max=100, mode=NumberSelectorMode.BOX)
+            )
+        )
+
+        for source, source_name in self._input_sources.items():
+            schema_dict[vol.Required(source.value_meaning, default=source_name)] = (
+                TextSelector()
+            )
+
+        for mode, mode_name in self._listening_modes.items():
+            schema_dict[vol.Required(mode.value_meaning, default=mode_name)] = (
+                TextSelector()
+            )
+
+        return self.async_show_form(
+            step_id="init",
+            data_schema=vol.Schema(schema_dict),
         )
