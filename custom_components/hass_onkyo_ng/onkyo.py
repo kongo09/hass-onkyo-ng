@@ -1,4 +1,7 @@
 from __future__ import annotations
+from eiscp import eISCP
+from eiscp.commands import COMMANDS
+from .const import *
 
 import asyncio
 from collections import defaultdict
@@ -16,6 +19,7 @@ import re
 
 _LOGGER = logging.getLogger(__name__)
 _ZONE_NAMES = ("main", "zone2", "zone3", "zone4")
+
 
 class OnkyoReceiver:
     """Class to manage fetching Onkyo data from the receiver."""
@@ -40,7 +44,15 @@ class OnkyoReceiver:
             return f"ReceiverSource(id: {self.id:02x}, name: {self.name})"
 
     class ReceiverInfo:
-        def __init__(self, model: str, serial: str, productid: str, macaddress: str, zones: List[OnkyoReceiver.ReceiverZone], sources: List[OnkyoReceiver.ReceiverSource]):
+        def __init__(
+            self,
+            model: str,
+            serial: str,
+            productid: str,
+            macaddress: str,
+            zones: List[OnkyoReceiver.ReceiverZone],
+            sources: List[OnkyoReceiver.ReceiverSource],
+        ):
             self.model = model
             self.serial = serial
             self.productid = productid
@@ -54,56 +66,67 @@ class OnkyoReceiver:
         @staticmethod
         def from_xml(receiver_information_xml: str):
             data = ET.fromstring(receiver_information_xml)
-            device = data.find('device')
-            model = device.find('model').text
-            serial = device.find('deviceserial').text
-            productid = device.find('productid').text
-            macaddress = device.find('macaddress').text
+            device = data.find("device")
+            model = device.find("model").text
+            serial = device.find("deviceserial").text
+            productid = device.find("productid").text
+            macaddress = device.find("macaddress").text
 
             zone_map = {}
             zones = []
-            for zone in device.find('zonelist').findall('zone'):
-                if int(zone.attrib['value']) > 0:
+            for zone in device.find("zonelist").findall("zone"):
+                if int(zone.attrib["value"]) > 0:
                     receiver_zone = OnkyoReceiver.ReceiverZone()
-                    receiver_zone.id = int(zone.attrib['id'], 16)
-                    receiver_zone.name = zone.attrib['name'].lower()
-                    receiver_zone.volmax = int(zone.attrib['volmax'])
+                    receiver_zone.id = int(zone.attrib["id"], 16)
+                    receiver_zone.name = zone.attrib["name"].lower()
+                    receiver_zone.volmax = int(zone.attrib["volmax"])
 
                     zone_map[receiver_zone.id] = receiver_zone
                     zones.append(receiver_zone)
 
             sources = []
-            for source in device.find('selectorlist').findall('selector'):
-                if int(source.attrib['value']) > 0:
+            for source in device.find("selectorlist").findall("selector"):
+                if int(source.attrib["value"]) > 0:
                     receiver_source = OnkyoReceiver.ReceiverSource()
-                    receiver_source.id = int(source.attrib['id'], 16)
-                    receiver_source.name = source.attrib['name']
+                    receiver_source.id = int(source.attrib["id"], 16)
+                    receiver_source.name = source.attrib["name"]
 
                     # Assume this is a bitwise identifier for which zones support this source
-                    source_zones = int(source.attrib['zone'], 16)
+                    source_zones = int(source.attrib["zone"], 16)
                     for zone_id in zone_map.keys():
                         if source_zones & (1 << (zone_id - 1)):
                             receiver_source.zones.append(zone_map[zone_id])
                             zone_map[zone_id].sources.append(receiver_source)
                     sources.append(receiver_source)
-            return OnkyoReceiver.ReceiverInfo(model, serial, productid, macaddress, zones, sources)
+            return OnkyoReceiver.ReceiverInfo(
+                model, serial, productid, macaddress, zones, sources
+            )
 
         @staticmethod
         def default(model: str, serial: str):
-            source_selector_cmd = {'main': 'SLI', 'zone2': 'SLZ', 'zone3': 'SL3', 'zone4': 'SL4'}
+            source_selector_cmd = {
+                "main": "SLI",
+                "zone2": "SLZ",
+                "zone3": "SL3",
+                "zone4": "SL4",
+            }
             source_mapping = {}
             zones = []
             for zone_id in range(1, 5):
                 receiver_zone = OnkyoReceiver.ReceiverZone()
                 receiver_zone.id = zone_id
-                receiver_zone.name = "main" if receiver_zone.id == 1 else "zone" + str(receiver_zone.id)
+                receiver_zone.name = (
+                    "main" if receiver_zone.id == 1 else "zone" + str(receiver_zone.id)
+                )
                 zones.append(receiver_zone)
 
                 # For now, provide a list of all zones available in the commands
-                source_command_args = COMMANDS[receiver_zone.name][source_selector_cmd[receiver_zone.name]]['values']
+                source_command_args = COMMANDS[receiver_zone.name][
+                    source_selector_cmd[receiver_zone.name]
+                ]["values"]
                 for source_id in source_command_args:
-                    if source_id not in ('UP', 'DOWN', 'QSTN'):
-                        name = source_command_args[source_id]['name']
+                    if source_id not in ("UP", "DOWN", "QSTN"):
+                        name = source_command_args[source_id]["name"]
                         if not isinstance(name, str):
                             name = "/".join(name)
                         name = name.upper()
@@ -116,8 +139,9 @@ class OnkyoReceiver:
                         receiver_source.zones.append(receiver_zone)
                         receiver_zone.sources.append(receiver_source)
 
-            return OnkyoReceiver.ReceiverInfo(model, serial, 'N/A', serial, zones, source_mapping.values())
-
+            return OnkyoReceiver.ReceiverInfo(
+                model, serial, "N/A", serial, zones, source_mapping.values()
+            )
 
     def __init__(
         self,
@@ -143,7 +167,7 @@ class OnkyoReceiver:
         self._sync_commands = defaultdict(OnkyoReceiver.SyncCommand)
         self._hass = hass
         if hass:
-            self._storage = Store[dict[str, Any]](hass, 1, f'onkyo_{host}')
+            self._storage = Store[dict[str, Any]](hass, 1, f"onkyo_{host}")
         else:
             self._storage = None
 
@@ -172,7 +196,11 @@ class OnkyoReceiver:
             retries = 3
             while retries > 0:
                 tasks = []
-                tasks.append(asyncio.create_task(self.command_async('dock.receiver-information=query')))
+                tasks.append(
+                    asyncio.create_task(
+                        self.command_async("dock.receiver-information=query")
+                    )
+                )
                 tasks.append(asyncio.create_task(self.command_udp_info()))
                 done, pending = await asyncio.wait(tasks, timeout=2)
                 for coroutine in pending:
@@ -183,7 +211,9 @@ class OnkyoReceiver:
                 retries -= 1
             if not self._receiver_info and self._receiver_udp_info:
                 udp_info = self._receiver_udp_info
-                self._receiver_info = OnkyoReceiver.ReceiverInfo.default(udp_info['model_name'], udp_info['identifier'])
+                self._receiver_info = OnkyoReceiver.ReceiverInfo.default(
+                    udp_info["model_name"], udp_info["identifier"]
+                )
 
     async def get_receiver_info(self) -> OnkyoReceiver.ReceiverInfo:
         await self.get_all_receiver_info()
@@ -206,10 +236,12 @@ class OnkyoReceiver:
             data = await self._storage.async_load()
             _LOGGER.info(f"Loaded data {data}")
             if data:
-                self._sound_modes = data.get('sound_modes', {})
+                self._sound_modes = data.get("sound_modes", {})
                 for zone in _ZONE_NAMES:
                     zone_key = f"{ATTR_ZONE}_{zone}"
-                    self.data[zone_key][ATTR_SOUND_MODES] = self._sound_modes.get(zone_key, [])
+                    self.data[zone_key][ATTR_SOUND_MODES] = self._sound_modes.get(
+                        zone_key, []
+                    )
 
                 for listener in self.listeners:
                     listener(self.data)
@@ -219,9 +251,7 @@ class OnkyoReceiver:
             self._storage.async_delay_save(self._data_to_save, 1)
 
     def _data_to_save(self):
-        data = {
-            'sound_modes': self._sound_modes
-        }
+        data = {"sound_modes": self._sound_modes}
         return data
 
     def disconnect(self):
@@ -241,7 +271,9 @@ class OnkyoReceiver:
             if zone in _ZONE_NAMES:
                 zone_key = f"{ATTR_ZONE}_{zone}"
                 if command in ["system-power", "power"]:
-                    updates[zone_key][ATTR_POWER] = POWER_ON if attrib == "on" else POWER_OFF
+                    updates[zone_key][ATTR_POWER] = (
+                        POWER_ON if attrib == "on" else POWER_OFF
+                    )
                 elif command == "audio-information":
                     info = self._parse_audio_information((command, attrib))
                     updates[zone_key][ATTR_AUDIO_INFO] = info
@@ -251,10 +283,12 @@ class OnkyoReceiver:
                 elif command in ["audio-muting", "muting"]:
                     updates[zone_key][ATTR_MUTE] = attrib == "on"
                 elif command in ("master-volume", "volume"):
-                    if attrib == 'N/A':
+                    if attrib == "N/A":
                         updates[zone_key][ATTR_VOLUME] = 0.0
                     else:
-                        updates[zone_key][ATTR_VOLUME] = attrib / (self._receiver_max_volume * self._max_volume / 100)
+                        updates[zone_key][ATTR_VOLUME] = attrib / (
+                            self._receiver_max_volume * self._max_volume / 100
+                        )
                 elif command in ["input-selector", "selector"]:
                     source_id = int(message[-2:], 16)
                     updates[zone_key][ATTR_SOURCE] = source_id
@@ -271,15 +305,17 @@ class OnkyoReceiver:
                         self._sound_modes[zone_key] = []
                     if not sound_mode in self._sound_modes[zone_key]:
                         self._sound_modes[zone_key].append(sound_mode)
-                        updates[zone_key][ATTR_SOUND_MODES] = self._sound_modes[zone_key]
+                        updates[zone_key][ATTR_SOUND_MODES] = self._sound_modes[
+                            zone_key
+                        ]
                         self.store_data()
                     updates[zone_key][ATTR_SOUND_MODE] = sound_mode
-                elif command == 'fl-display-information':
-                    data = b''
-                    for c in re.findall('..', message[3:]):
+                elif command == "fl-display-information":
+                    data = b""
+                    for c in re.findall("..", message[3:]):
                         data += int(c, 16).to_bytes(1)
-                    updates[zone_key][ATTR_DISPLAY] = data.decode('utf-8')
-            elif zone == 'dock':
+                    updates[zone_key][ATTR_DISPLAY] = data.decode("utf-8")
+            elif zone == "dock":
                 if command == "receiver-information":
                     _LOGGER.debug("Got receiver info. Parsing")
                     info = OnkyoReceiver.ReceiverInfo.from_xml(attrib)
@@ -298,7 +334,9 @@ class OnkyoReceiver:
             if self._hass:
                 _LOGGER.debug(f"Dispatch data to {len(self.listeners)} listeners")
                 for listener in self.listeners:
-                    asyncio.run_coroutine_threadsafe(listener(self.data), self._hass.loop)
+                    asyncio.run_coroutine_threadsafe(
+                        listener(self.data), self._hass.loop
+                    )
             else:
                 _LOGGER.warning("Update lost (no event loop)")
 
@@ -326,6 +364,97 @@ class OnkyoReceiver:
     def _tuple_get(self, tup, index, default=None):
         """Return a tuple item at index or a default value if it doesn't exist."""
         return (tup[index : index + 1] or [default])[0]
+
+    def get_sources(self) -> list:
+        """Iterate through the sources of the receiver."""
+
+        # retrieve available sources from the library and assume that is correct
+
+        # find the power state and switch on if needed
+        status = self.command("system-power query")
+        power_state = status[1]
+        if power_state != "on":
+            self.command("system-power on")
+
+        # check if muted, if not, mute to avoid funny sound
+        status = self.command("audio-muting query")
+        muting_state = status[1]
+        if muting_state != "on":
+            self.command("audio-muting on")
+
+        # iterate over all available source until we hit the first source again to compile the list
+        first_source = None
+        source_list = []
+
+        while True:
+            current_source_raw = self.command("input-selector up")
+            current_source = ""
+            if current_source_raw:
+                sources = self._parse_onkyo_payload(current_source_raw)
+                current_source = "_".join(sources)
+
+            # if we find the first source again, we're done
+            if current_source == first_source:
+                break
+
+            # remember the first source
+            if not first_source:
+                first_source = current_source
+
+            # store the found source in the list
+            source_list.append(current_source)
+
+        # get receiver back into original state
+        self.command("input-selector down")
+        self.command(f"audio-muting {muting_state}")
+        if power_state != "on":
+            self.command("system-power off")
+
+        return source_list
+
+    def get_sound_modes(self) -> list:
+        """Iterate through the sound modes of the receiver."""
+
+        # find the power state and switch on if needed
+        status = self.command("system-power query")
+        power_state = status[1]
+        if power_state != "on":
+            self.command("system-power on")
+
+        # check if muted, if not, mute to avoid funny sound
+        status = self.command("audio-muting query")
+        muting_state = status[1]
+        if muting_state != "on":
+            self.command("audio-muting on")
+
+        # iterate over all available sound modes until we hit the first sound mode again to compile the list
+        first_sound_mode = None
+        sound_mode_list = []
+
+        while True:
+            current_sound_mode_raw = self.raw("LMDUP")
+            current_sound_mode = ""
+            if current_sound_mode_raw:
+                current_sound_mode = current_sound_mode_raw[3:]
+
+            # if we find the first sound mode again, we're done
+            if current_sound_mode == first_sound_mode and len(sound_mode_list) > 2:
+                break
+
+            # remember the first source
+            if not first_sound_mode:
+                first_sound_mode = current_sound_mode
+
+            # store the found source in the list
+            sound_mode_list.append(current_sound_mode)
+
+        # get receiver back into original state
+        self.raw(f"LMD{first_sound_mode}")
+        self.command(f"audio-muting {muting_state}")
+        if power_state != "on":
+            self.command("system-power off")
+
+        return sound_mode_list
 
     def _parse_audio_information(self, audio_information_raw):
         values = self._parse_onkyo_payload(audio_information_raw)
@@ -401,7 +530,7 @@ class OnkyoReceiver:
             # This only waits 0.1 seconds and may miss the response, so retry a few times
             self._receiver_udp_info = self._receiver.info
             if self._receiver_udp_info:
-                self.data[ATTR_NAME] = self._receiver_udp_info['model_name']
+                self.data[ATTR_NAME] = self._receiver_udp_info["model_name"]
         return self._receiver_udp_info
 
     def select_source(self, zone: ReceiverZone, source_id: int):
@@ -466,6 +595,7 @@ class OnkyoReceiver:
         @property
         def result(self) -> str:
             return self._result
+
 
 class Event_ts(asyncio.Event):
     def set(self):

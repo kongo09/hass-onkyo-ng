@@ -1,4 +1,5 @@
 """The Onkyo NG component."""
+
 from homeassistant import config_entries, exceptions
 from homeassistant.components import zeroconf
 from homeassistant.data_entry_flow import FlowResult
@@ -20,6 +21,7 @@ from .const import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+
 
 def host_valid(host: str) -> bool:
     """Return True if hostname or IP address is valid."""
@@ -46,7 +48,9 @@ class OnkyoReceiverConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     def __init__(self) -> None:
         """Initialize."""
         self.host: str = None
-        _LOGGER.info("Created Onkyo config flow")
+        self._sources: dict[str, str] = {}
+        self._sound_modes: dict[str, str] = {}
+        self._input: dict[str, Any] = None
 
     def _get_schema(self, user_input):
         """Provide schema for user input."""
@@ -103,9 +107,24 @@ class OnkyoReceiverConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 await self.async_set_unique_id(unique_id)
                 self._abort_if_unique_id_configured()
 
+                # create a receiver object to scan for available sources and sound modes
+                onkyo_receiver = OnkyoReceiver(receiver=receiver)
+                self._sources = onkyo_receiver._source_mapping
+                self._sound_modes = onkyo_receiver._sound_mode_mapping
+
+                # adjust sources
+                if self._sources:
+                    self._input = user_input
+                    return await self.async_step_sources()
+
                 # compile a name from model and serial
                 return self.async_create_entry(
-                    title=user_input.get(CONF_NAME) or model_name, data=user_input
+                    title=user_input.get(CONF_NAME) or model_name,
+                    data={
+                        **user_input,
+                        CONF_SOURCES: self._sources,
+                        CONF_SOUND_MODES: self._sound_modes,
+                    },
                 )
 
             except InvalidHost:
@@ -121,6 +140,28 @@ class OnkyoReceiverConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         # show the form to the user
         return self.async_show_form(step_id="user", data_schema=schema, errors=errors)
+
+    async def async_step_sources(self, user_input: dict[str, Any] = None) -> FlowResult:
+        """Handle the custom naming of sources."""
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            pass
+        else:
+            user_input = {}
+
+        sources_list = list(self._sources.keys())
+
+        schema = vol.Schema(
+            {
+                vol.Optional(
+                    CONF_SOURCES, description={"suggested_value": sources_list}
+                ): cv.multi_select({source: source for source in sources_list}),
+            }
+        )
+
+        return self.async_show_form(
+            step_id="sources", data_schema=schema, errors=errors
+        )
 
     async def async_step_zeroconf(
         self, discovery_info: zeroconf.ZeroconfServiceInfo = None
@@ -174,7 +215,6 @@ class OnkyoReceiverConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         # user input was provided, so check and save it
         if user_input is not None:
-
             return self.async_create_entry(
                 title=user_input[CONF_NAME],
                 data={

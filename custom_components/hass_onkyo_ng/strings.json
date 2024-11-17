@@ -10,6 +10,13 @@
           "scan_interval": "State polling interval (seconds)"
         }
       },
+      "sources": {
+        "title": "Source selection",
+        "description": "Only enabled sources will be shown in the interface",
+        "data": {
+          "sources": "Sources list"
+        }
+      },
       "zeroconf_confirm": {
         "title": "New Onkyo receiver discovered",
         "description": "{model}",
